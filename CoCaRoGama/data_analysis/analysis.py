@@ -10,10 +10,9 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 
-print("Current working directory:", os.getcwd())
 
 
-df = pd.read_csv('data_analysis/data_python.csv', names=['cycle', 'battery', 'boxes', 'alive', 'type'])
+df = pd.read_csv('CoCaRoGama/data_analysis/data_python.csv', names=['cycle', 'battery', 'boxes', 'alive', 'type'])
 
 
 print("Robot types in data:", df['type'].unique())

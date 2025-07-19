@@ -114,7 +114,7 @@ species robot_base skills: [moving] {
         do wander amplitude: 30.0;        
     }
     
-    // target random box is different for each robot type
+    // search & target box is different for each robot type
     
    reflex go_to_target_box when: targeted_box != nil and battery > 0 {
         path path_followed <- goto(target: targeted_box.location, on: cell, return_path: true);

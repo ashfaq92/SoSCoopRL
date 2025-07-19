@@ -1,0 +1,2921 @@
+Schelling Segregation Model
+The Schelling segregation model is a classic agent-based model, demonstrating how even a mild preference for similar neighbors can lead to a much higher degree of segregation than we would intuitively expect. The model consists of agents on a square grid, where each grid cell can contain at most one agent. Agents come in two colors: orange and blue. They are happy if a certain number of their eight possible neighbors are of the same color, and unhappy otherwise. Unhappy agents will pick a random empty cell to move to each step, until they are happy. The model keeps running until there are no unhappy agents.
+
+By default, the number of similar neighbors the agents need to be happy is set to 3. That means the agents would be perfectly happy with a majority of their neighbors being of a different color (e.g. a Blue agent would be happy with five Orange neighbors and three Blue ones). Despite this, the model consistently leads to a high degree of segregation, with most agents ending up with no neighbors of a different color.
+
+
+from mesa.discrete_space import CellAgent
+
+
+class SchellingAgent(CellAgent):
+    """Schelling segregation agent."""
+
+    def __init__(
+        self, model, cell, agent_type: int, homophily: float = 0.4, radius: int = 1
+    ) -> None:
+        """Create a new Schelling agent.
+        Args:
+            model: The model instance the agent belongs to
+            agent_type: Indicator for the agent's type (minority=1, majority=0)
+            homophily: Minimum number of similar neighbors needed for happiness
+            radius: Search radius for checking neighbor similarity
+        """
+        super().__init__(model)
+        self.cell = cell
+        self.type = agent_type
+        self.homophily = homophily
+        self.radius = radius
+        self.happy = False
+
+    def assign_state(self) -> None:
+        """Determine if agent is happy and move if necessary."""
+        neighbors = list(self.cell.get_neighborhood(radius=self.radius).agents)
+
+        # Count similar neighbors
+        similar_neighbors = len([n for n in neighbors if n.type == self.type])
+
+        # Calculate the fraction of similar neighbors
+        if (valid_neighbors := len(neighbors)) > 0:
+            similarity_fraction = similar_neighbors / valid_neighbors
+        else:
+            # If there are no neighbors, the similarity fraction is 0
+            similarity_fraction = 0.0
+
+        if similarity_fraction < self.homophily:
+            self.happy = False
+        else:
+            self.happy = True
+            self.model.happy += 1
+
+    def step(self) -> None:
+        # Move if unhappy
+        if not self.happy:
+            self.cell = self.model.grid.select_random_empty_cell()
+
+
+
+from mesa import Model
+from mesa.datacollection import DataCollector
+from mesa.discrete_space import OrthogonalMooreGrid
+from mesa.examples.basic.schelling.agents import SchellingAgent
+
+
+class Schelling(Model):
+    """Model class for the Schelling segregation model."""
+
+    def __init__(
+        self,
+        height: int = 20,
+        width: int = 20,
+        density: float = 0.8,
+        minority_pc: float = 0.5,
+        homophily: float = 0.4,
+        radius: int = 1,
+        seed=None,
+    ):
+        """Create a new Schelling model.
+
+        Args:
+            width: Width of the grid
+            height: Height of the grid
+            density: Initial chance for a cell to be populated (0-1)
+            minority_pc: Chance for an agent to be in minority class (0-1)
+            homophily: Minimum number of similar neighbors needed for happiness
+            radius: Search radius for checking neighbor similarity
+            seed: Seed for reproducibility
+        """
+        super().__init__(seed=seed)
+
+        # Model parameters
+        self.density = density
+        self.minority_pc = minority_pc
+
+        # Initialize grid
+        self.grid = OrthogonalMooreGrid((width, height), random=self.random, capacity=1)
+
+        # Track happiness
+        self.happy = 0
+
+        # Set up data collection
+        self.datacollector = DataCollector(
+            model_reporters={
+                "happy": "happy",
+                "pct_happy": lambda m: (m.happy / len(m.agents)) * 100
+                if len(m.agents) > 0
+                else 0,
+                "population": lambda m: len(m.agents),
+                "minority_pct": lambda m: (
+                    sum(1 for agent in m.agents if agent.type == 1)
+                    / len(m.agents)
+                    * 100
+                    if len(m.agents) > 0
+                    else 0
+                ),
+            },
+            agent_reporters={"agent_type": "type"},
+        )
+
+        # Create agents and place them on the grid
+        for cell in self.grid.all_cells:
+            if self.random.random() < self.density:
+                agent_type = 1 if self.random.random() < minority_pc else 0
+                SchellingAgent(
+                    self, cell, agent_type, homophily=homophily, radius=radius
+                )
+
+        # Collect initial state
+        self.agents.do("assign_state")
+        self.datacollector.collect(self)
+
+    def step(self):
+        """Run one step of the model."""
+        self.happy = 0  # Reset counter of happy agents
+        self.agents.shuffle_do("step")  # Activate all agents in random order
+        self.agents.do("assign_state")
+        self.datacollector.collect(self)  # Collect data
+        self.running = self.happy < len(self.agents)  # Continue until everyone is happy
+
+
+
+import solara
+
+from mesa.examples.basic.schelling.model import Schelling
+from mesa.visualization import (
+    Slider,
+    SolaraViz,
+    make_plot_component,
+    make_space_component,
+)
+from mesa.visualization.components import AgentPortrayalStyle
+
+
+def get_happy_agents(model):
+    """Display a text count of how many happy agents there are."""
+    return solara.Markdown(f"**Happy agents: {model.happy}**")
+
+
+def agent_portrayal(agent):
+    style = AgentPortrayalStyle(
+        x=agent.cell.coordinate[0],
+        y=agent.cell.coordinate[1],
+        marker="./resources/orange_happy.png",
+        size=75,
+    )
+    if agent.type == 0:
+        if agent.happy:
+            style.update(
+                ("marker", "./resources/blue_happy.png"),
+            )
+        else:
+            style.update(
+                ("marker", "./resources/blue_unhappy.png"),
+                ("size", 50),
+                ("zorder", 2),
+            )
+    else:
+        if not agent.happy:
+            style.update(
+                ("marker", "./resources/orange_unhappy.png"),
+                ("size", 50),
+                ("zorder", 2),
+            )
+
+    return style
+
+
+model_params = {
+    "seed": {
+        "type": "InputText",
+        "value": 42,
+        "label": "Random Seed",
+    },
+    "density": Slider("Agent density", 0.8, 0.1, 1.0, 0.1),
+    "minority_pc": Slider("Fraction minority", 0.2, 0.0, 1.0, 0.05),
+    "homophily": Slider("Homophily", 0.4, 0.0, 1.0, 0.125),
+    "width": 20,
+    "height": 20,
+}
+
+model1 = Schelling()
+
+HappyPlot = make_plot_component({"happy": "tab:green"})
+
+page = SolaraViz(
+    model1,
+    components=[
+        make_space_component(agent_portrayal),
+        HappyPlot,
+        get_happy_agents,
+    ],
+    model_params=model_params,
+)
+page  # noqa
+
+
+Boltzmann Wealth Model (Tutorial)
+
+A simple model of agents exchanging wealth. All agents start with the same amount of money. Every step, each agent with one unit of money or more gives one unit of wealth to another random agent. Mesa’s Getting Started section walks through the Boltzmann Wealth Model in a series of short introductory tutorials, starting withCreating your First Model.
+
+As the model runs, the distribution of wealth among agents goes from being perfectly uniform (all agents have the same starting wealth), to highly skewed – a small number have high wealth, more have none at all.
+from mesa.discrete_space import CellAgent
+
+
+class MoneyAgent(CellAgent):
+    """An agent with fixed initial wealth.
+
+    Each agent starts with 1 unit of wealth and can give 1 unit to other agents
+    if they occupy the same cell.
+
+    Attributes:
+        wealth (int): The agent's current wealth (starts at 1)
+    """
+
+    def __init__(self, model, cell):
+        """Create a new agent.
+
+        Args:
+            model (Model): The model instance that contains the agent
+        """
+        super().__init__(model)
+        self.cell = cell
+        self.wealth = 1
+
+    def move(self):
+        """Move the agent to a random neighboring cell."""
+        self.cell = self.cell.neighborhood.select_random_cell()
+
+    def give_money(self):
+        """Give 1 unit of wealth to a random agent in the same cell."""
+        cellmates = [a for a in self.cell.agents if a is not self]
+
+        if cellmates:  # Only give money if there are other agents present
+            other = self.random.choice(cellmates)
+            other.wealth += 1
+            self.wealth -= 1
+
+    def step(self):
+        """Execute one step for the agent:
+        1. Move to a neighboring cell
+        2. If wealth > 0, maybe give money to another agent in the same cell
+        """
+        self.move()
+        if self.wealth > 0:
+            self.give_money()
+
+
+"""
+Boltzmann Wealth Model
+=====================
+
+A simple model of wealth distribution based on the Boltzmann-Gibbs distribution.
+Agents move randomly on a grid, giving one unit of wealth to a random neighbor
+when they occupy the same cell.
+"""
+
+from mesa import Model
+from mesa.datacollection import DataCollector
+from mesa.discrete_space import OrthogonalMooreGrid
+from mesa.examples.basic.boltzmann_wealth_model.agents import MoneyAgent
+
+
+class BoltzmannWealth(Model):
+    """A simple model of an economy where agents exchange currency at random.
+
+    All agents begin with one unit of currency, and each time step agents can give
+    a unit of currency to another agent in the same cell. Over time, this produces
+    a highly skewed distribution of wealth.
+
+    Attributes:
+        num_agents (int): Number of agents in the model
+        grid (MultiGrid): The space in which agents move
+        running (bool): Whether the model should continue running
+        datacollector (DataCollector): Collects and stores model data
+    """
+
+    def __init__(self, n=100, width=10, height=10, seed=None):
+        """Initialize the model.
+
+        Args:
+            n (int, optional): Number of agents. Defaults to 100.
+            width (int, optional): Grid width. Defaults to 10.
+            height (int, optional): Grid height. Defaults to 10.
+            seed (int, optional): Random seed. Defaults to None.
+        """
+        super().__init__(seed=seed)
+
+        self.num_agents = n
+        self.grid = OrthogonalMooreGrid((width, height), random=self.random)
+
+        # Set up data collection
+        self.datacollector = DataCollector(
+            model_reporters={"Gini": self.compute_gini},
+            agent_reporters={"Wealth": "wealth"},
+        )
+        MoneyAgent.create_agents(
+            self,
+            self.num_agents,
+            self.random.choices(self.grid.all_cells.cells, k=self.num_agents),
+        )
+
+        self.running = True
+        self.datacollector.collect(self)
+
+    def step(self):
+        self.agents.shuffle_do("step")  # Activate all agents in random order
+        self.datacollector.collect(self)  # Collect data
+
+    def compute_gini(self):
+        """Calculate the Gini coefficient for the model's current wealth distribution.
+
+        The Gini coefficient is a measure of inequality in distributions.
+        - A Gini of 0 represents complete equality, where all agents have equal wealth.
+        - A Gini of 1 represents maximal inequality, where one agent has all wealth.
+        """
+        agent_wealths = [agent.wealth for agent in self.agents]
+        x = sorted(agent_wealths)
+        n = self.num_agents
+        # Calculate using the standard formula for Gini coefficient
+        b = sum(xi * (n - i) for i, xi in enumerate(x)) / (n * sum(x))
+        return 1 + (1 / n) - 2 * b
+
+
+
+from mesa.examples.basic.boltzmann_wealth_model.model import BoltzmannWealth
+from mesa.mesa_logging import INFO, log_to_stderr
+from mesa.visualization import (
+    SolaraViz,
+    make_plot_component,
+    make_space_component,
+)
+
+log_to_stderr(INFO)
+
+
+def agent_portrayal(agent):
+    color = agent.wealth  # we are using a colormap to translate wealth to color
+    return {"color": color}
+
+
+model_params = {
+    "seed": {
+        "type": "InputText",
+        "value": 42,
+        "label": "Random Seed",
+    },
+    "n": {
+        "type": "SliderInt",
+        "value": 50,
+        "label": "Number of agents:",
+        "min": 10,
+        "max": 100,
+        "step": 1,
+    },
+    "width": 10,
+    "height": 10,
+}
+
+
+def post_process(ax):
+    ax.get_figure().colorbar(ax.collections[0], label="wealth", ax=ax)
+
+
+# Create initial model instance
+model = BoltzmannWealth(50, 10, 10)
+
+# Create visualization elements. The visualization elements are solara components
+# that receive the model instance as a "prop" and display it in a certain way.
+# Under the hood these are just classes that receive the model instance.
+# You can also author your own visualization elements, which can also be functions
+# that receive the model instance and return a valid solara component.
+
+SpaceGraph = make_space_component(
+    agent_portrayal, cmap="viridis", vmin=0, vmax=10, post_process=post_process
+)
+GiniPlot = make_plot_component("Gini")
+
+# Create the SolaraViz page. This will automatically create a server and display the
+# visualization elements in a web browser.
+# Display it using the following command in the example directory:
+# solara run app.py
+# It will automatically update and display any changes made to this file
+page = SolaraViz(
+    model,
+    components=[SpaceGraph, GiniPlot],
+    model_params=model_params,
+    name="Boltzmann Wealth Model",
+)
+page  # noqa
+
+
+# In a notebook environment, we can also display the visualization elements directly
+# SpaceGraph(model1)
+# GiniPlot(model1)
+
+# The plots will be static. If you want to pick up model steps,
+# you have to make the model reactive first
+# reactive_model = solara.reactive(model1)
+# SpaceGraph(reactive_model)
+# In a different notebook block:
+# reactive_model.value.step()
+
+
+
+Boids Flockers
+
+An implementation of Craig Reynolds’s Boids flocker model. Agents (simulated birds) try to fly towards the average position of their neighbors and in the same direction as them, while maintaining a minimum distance. This produces flocking behavior.
+
+This model tests Mesa’s continuous space feature, and uses numpy arrays to represent vectors.
+
+"""A Boid (bird-oid) agent for implementing Craig Reynolds's Boids flocking model.
+
+This implementation uses numpy arrays to represent vectors for efficient computation
+of flocking behavior.
+"""
+
+import numpy as np
+
+from mesa.experimental.continuous_space import ContinuousSpaceAgent
+
+
+class Boid(ContinuousSpaceAgent):
+    """A Boid-style flocker agent.
+
+    The agent follows three behaviors to flock:
+        - Cohesion: steering towards neighboring agents
+        - Separation: avoiding getting too close to any other agent
+        - Alignment: trying to fly in the same direction as neighbors
+
+    Boids have a vision that defines the radius in which they look for their
+    neighbors to flock with. Their speed (a scalar) and direction (a vector)
+    define their movement. Separation is their desired minimum distance from
+    any other Boid.
+    """
+
+    def __init__(
+        self,
+        model,
+        space,
+        position=(0, 0),
+        speed=1,
+        direction=(1, 1),
+        vision=1,
+        separation=1,
+        cohere=0.03,
+        separate=0.015,
+        match=0.05,
+    ):
+        """Create a new Boid flocker agent.
+
+        Args:
+            model: Model instance the agent belongs to
+            speed: Distance to move per step
+            direction: numpy vector for the Boid's direction of movement
+            vision: Radius to look around for nearby Boids
+            separation: Minimum distance to maintain from other Boids
+            cohere: Relative importance of matching neighbors' positions (default: 0.03)
+            separate: Relative importance of avoiding close neighbors (default: 0.015)
+            match: Relative importance of matching neighbors' directions (default: 0.05)
+        """
+        super().__init__(space, model)
+        self.position = position
+        self.speed = speed
+        self.direction = direction
+        self.vision = vision
+        self.separation = separation
+        self.cohere_factor = cohere
+        self.separate_factor = separate
+        self.match_factor = match
+        self.neighbors = []
+        self.angle = 0.0  # represents the angle at which the boid is moving
+
+    def step(self):
+        """Get the Boid's neighbors, compute the new vector, and move accordingly."""
+        neighbors, distances = self.get_neighbors_in_radius(radius=self.vision)
+        self.neighbors = [n for n in neighbors if n is not self]
+
+        # If no neighbors, maintain current direction
+        if not neighbors:
+            self.position += self.direction * self.speed
+            return
+
+        delta = self.space.calculate_difference_vector(self.position, agents=neighbors)
+
+        cohere_vector = delta.sum(axis=0) * self.cohere_factor
+        separation_vector = (
+            -1 * delta[distances < self.separation].sum(axis=0) * self.separate_factor
+        )
+        match_vector = (
+            np.asarray([n.direction for n in neighbors]).sum(axis=0) * self.match_factor
+        )
+
+        # Update direction based on the three behaviors
+        self.direction += (cohere_vector + separation_vector + match_vector) / len(
+            neighbors
+        )
+
+        # Normalize direction vector
+        self.direction /= np.linalg.norm(self.direction)
+
+        # Move boid
+        self.position += self.direction * self.speed
+
+
+
+"""
+Boids Flocking Model
+===================
+A Mesa implementation of Craig Reynolds's Boids flocker model.
+Uses numpy arrays to represent vectors.
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.abspath("../../../.."))
+
+
+import numpy as np
+
+from mesa import Model
+from mesa.examples.basic.boid_flockers.agents import Boid
+from mesa.experimental.continuous_space import ContinuousSpace
+
+
+class BoidFlockers(Model):
+    """Flocker model class. Handles agent creation, placement and scheduling."""
+
+    def __init__(
+        self,
+        population_size=100,
+        width=100,
+        height=100,
+        speed=1,
+        vision=10,
+        separation=2,
+        cohere=0.03,
+        separate=0.015,
+        match=0.05,
+        seed=None,
+    ):
+        """Create a new Boids Flocking model.
+
+        Args:
+            population_size: Number of Boids in the simulation (default: 100)
+            width: Width of the space (default: 100)
+            height: Height of the space (default: 100)
+            speed: How fast the Boids move (default: 1)
+            vision: How far each Boid can see (default: 10)
+            separation: Minimum distance between Boids (default: 2)
+            cohere: Weight of cohesion behavior (default: 0.03)
+            separate: Weight of separation behavior (default: 0.015)
+            match: Weight of alignment behavior (default: 0.05)
+            seed: Random seed for reproducibility (default: None)
+        """
+        super().__init__(seed=seed)
+        self.agent_angles = np.zeros(
+            population_size
+        )  # holds the angle representing the direction of all agents at a given step
+
+        # Set up the space
+        self.space = ContinuousSpace(
+            [[0, width], [0, height]],
+            torus=True,
+            random=self.random,
+            n_agents=population_size,
+        )
+
+        # Create and place the Boid agents
+        positions = self.rng.random(size=(population_size, 2)) * self.space.size
+        directions = self.rng.uniform(-1, 1, size=(population_size, 2))
+        Boid.create_agents(
+            self,
+            population_size,
+            self.space,
+            position=positions,
+            direction=directions,
+            cohere=cohere,
+            separate=separate,
+            match=match,
+            speed=speed,
+            vision=vision,
+            separation=separation,
+        )
+
+        # For tracking statistics
+        self.average_heading = None
+        self.update_average_heading()
+
+    # vectorizing the calculation of angles for all agents
+    def calculate_angles(self):
+        d1 = np.array([agent.direction[0] for agent in self.agents])
+        d2 = np.array([agent.direction[1] for agent in self.agents])
+        self.agent_angles = np.degrees(np.arctan2(d1, d2))
+        for agent, angle in zip(self.agents, self.agent_angles):
+            agent.angle = angle
+
+    def update_average_heading(self):
+        """Calculate the average heading (direction) of all Boids."""
+        if not self.agents:
+            self.average_heading = 0
+            return
+
+        headings = np.array([agent.direction for agent in self.agents])
+        mean_heading = np.mean(headings, axis=0)
+        self.average_heading = np.arctan2(mean_heading[1], mean_heading[0])
+
+    def step(self):
+        """Run one step of the model.
+
+        All agents are activated in random order using the AgentSet shuffle_do method.
+        """
+        self.agents.shuffle_do("step")
+        self.update_average_heading()
+        self.calculate_angles()
+
+
+import os
+import sys
+
+from matplotlib.markers import MarkerStyle
+
+sys.path.insert(0, os.path.abspath("../../../.."))
+
+from mesa.examples.basic.boid_flockers.model import BoidFlockers
+from mesa.visualization import Slider, SolaraViz, make_space_component
+
+# Pre-compute markers for different angles (e.g., every 10 degrees)
+MARKER_CACHE = {}
+for angle in range(0, 360, 10):
+    marker = MarkerStyle(10)
+    marker._transform = marker.get_transform().rotate_deg(angle)
+    MARKER_CACHE[angle] = marker
+
+
+def boid_draw(agent):
+    neighbors = len(agent.neighbors)
+
+    # Calculate the angle
+    deg = agent.angle
+    # Round to nearest 10 degrees
+    rounded_deg = round(deg / 10) * 10 % 360
+
+    # using cached markers to speed things up
+    if neighbors <= 1:
+        return {"color": "red", "size": 20, "marker": MARKER_CACHE[rounded_deg]}
+    elif neighbors >= 2:
+        return {"color": "green", "size": 20, "marker": MARKER_CACHE[rounded_deg]}
+
+
+model_params = {
+    "seed": {
+        "type": "InputText",
+        "value": 42,
+        "label": "Random Seed",
+    },
+    "population_size": Slider(
+        label="Number of boids",
+        value=100,
+        min=10,
+        max=200,
+        step=10,
+    ),
+    "width": 100,
+    "height": 100,
+    "speed": Slider(
+        label="Speed of Boids",
+        value=5,
+        min=1,
+        max=20,
+        step=1,
+    ),
+    "vision": Slider(
+        label="Vision of Bird (radius)",
+        value=10,
+        min=1,
+        max=50,
+        step=1,
+    ),
+    "separation": Slider(
+        label="Minimum Separation",
+        value=2,
+        min=1,
+        max=20,
+        step=1,
+    ),
+}
+
+model = BoidFlockers()
+
+page = SolaraViz(
+    model,
+    components=[make_space_component(agent_portrayal=boid_draw, backend="matplotlib")],
+    model_params=model_params,
+    name="Boid Flocking Model",
+)
+page  # noqa
+
+
+
+Conway’s Game Of “Life”
+
+The Game of Life, also known simply as “Life”, is a cellular automaton devised by the British mathematician John Horton Conway in 1970.
+
+The “game” is a zero-player game, meaning that its evolution is determined by its initial state, requiring no further input by a human. One interacts with the Game of “Life” by creating an initial configuration and observing how it evolves, or, for advanced “players”, by creating patterns with particular properties.
+
+from mesa.discrete_space import FixedAgent
+
+
+class Cell(FixedAgent):
+    """Represents a single ALIVE or DEAD cell in the simulation."""
+
+    DEAD = 0
+    ALIVE = 1
+
+    @property
+    def x(self):
+        return self.cell.coordinate[0]
+
+    @property
+    def y(self):
+        return self.cell.coordinate[1]
+
+    def __init__(self, model, cell, init_state=DEAD):
+        """Create a cell, in the given state, at the given x, y position."""
+        super().__init__(model)
+        self.cell = cell
+        self.state = init_state
+        self._next_state = None
+
+    @property
+    def is_alive(self):
+        return self.state == self.ALIVE
+
+    @property
+    def neighbors(self):
+        return self.cell.neighborhood.agents
+
+    def determine_state(self):
+        """Compute if the cell will be dead or alive at the next tick.  This is
+        based on the number of alive or dead neighbors.  The state is not
+        changed here, but is just computed and stored in self._nextState,
+        because our current state may still be necessary for our neighbors
+        to calculate their next state.
+        """
+        # Get the neighbors and apply the rules on whether to be alive or dead
+        # at the next tick.
+        live_neighbors = sum(neighbor.is_alive for neighbor in self.neighbors)
+
+        # Assume nextState is unchanged, unless changed below.
+        self._next_state = self.state
+        if self.is_alive:
+            if live_neighbors < 2 or live_neighbors > 3:
+                self._next_state = self.DEAD
+        else:
+            if live_neighbors == 3:
+                self._next_state = self.ALIVE
+
+    def assume_state(self):
+        """Set the state to the new computed state -- computed in step()."""
+        self.state = self._next_state
+
+
+
+from mesa import Model
+from mesa.discrete_space import OrthogonalMooreGrid
+from mesa.examples.basic.conways_game_of_life.agents import Cell
+
+
+class ConwaysGameOfLife(Model):
+    """Represents the 2-dimensional array of cells in Conway's Game of Life."""
+
+    def __init__(self, width=50, height=50, initial_fraction_alive=0.2, seed=None):
+        """Create a new playing area of (width, height) cells."""
+        super().__init__(seed=seed)
+        # Use a simple grid, where edges wrap around.
+        self.grid = OrthogonalMooreGrid((width, height), capacity=1, torus=True)
+
+        # Place a cell at each location, with some initialized to
+        # ALIVE and some to DEAD.
+        for cell in self.grid.all_cells:
+            Cell(
+                self,
+                cell,
+                init_state=Cell.ALIVE
+                if self.random.random() < initial_fraction_alive
+                else Cell.DEAD,
+            )
+
+        self.running = True
+
+    def step(self):
+        """Perform the model step in two stages:
+        - First, all cells assume their next state (whether they will be dead or alive)
+        - Then, all cells change state to their next state.
+        """
+        self.agents.do("determine_state")
+        self.agents.do("assume_state")
+
+
+
+from mesa.examples.basic.conways_game_of_life.model import ConwaysGameOfLife
+from mesa.visualization import (
+    SolaraViz,
+    make_space_component,
+)
+
+
+def agent_portrayal(agent):
+    return {
+        "color": "white" if agent.state == 0 else "black",
+        "marker": "s",
+        "size": 25,
+    }
+
+
+def post_process(ax):
+    ax.set_aspect("equal")
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+
+model_params = {
+    "seed": {
+        "type": "InputText",
+        "value": 42,
+        "label": "Random Seed",
+    },
+    "width": {
+        "type": "SliderInt",
+        "value": 50,
+        "label": "Width",
+        "min": 5,
+        "max": 60,
+        "step": 1,
+    },
+    "height": {
+        "type": "SliderInt",
+        "value": 50,
+        "label": "Height",
+        "min": 5,
+        "max": 60,
+        "step": 1,
+    },
+    "initial_fraction_alive": {
+        "type": "SliderFloat",
+        "value": 0.2,
+        "label": "Cells initially alive",
+        "min": 0,
+        "max": 1,
+        "step": 0.01,
+    },
+}
+
+# Create initial model instance
+model1 = ConwaysGameOfLife()
+
+# Create visualization elements. The visualization elements are solara components
+# that receive the model instance as a "prop" and display it in a certain way.
+# Under the hood these are just classes that receive the model instance.
+# You can also author your own visualization elements, which can also be functions
+# that receive the model instance and return a valid solara component.
+SpaceGraph = make_space_component(
+    agent_portrayal, post_process=post_process, draw_grid=False
+)
+
+
+# Create the SolaraViz page. This will automatically create a server and display the
+# visualization elements in a web browser.
+# Display it using the following command in the example directory:
+# solara run app.py
+# It will automatically update and display any changes made to this file
+page = SolaraViz(
+    model1,
+    components=[SpaceGraph],
+    model_params=model_params,
+    name="Game of Life",
+)
+page  # noqa
+
+
+Virus on a Network
+
+This model is based on the NetLogo model “Virus on Network”. It demonstrates the spread of a virus through a network and follows the SIR model, commonly seen in epidemiology.
+
+The SIR model is one of the simplest compartmental models, and many models are derivatives of this basic form. The model consists of three compartments:
+
+S: The number of susceptible individuals. When a susceptible and an infectious individual come into “infectious contact”, the susceptible individual contracts the disease and transitions to the infectious compartment. I: The number of infectious individuals. These are individuals who have been infected and are capable of infecting susceptible individuals. R for the number of removed (and immune) or deceased individuals. These are individuals who have been infected and have either recovered from the disease and entered the removed compartment, or died. It is assumed that the number of deaths is negligible with respect to the total population. This compartment may also be called “recovered” or “resistant”.
+
+For more information about this model, read the NetLogo’s web page: http://ccl.northwestern.edu/netlogo/models/VirusonaNetwork.
+
+JavaScript library used in this example to render the network: d3.js.
+
+
+from enum import Enum
+
+from mesa.discrete_space import FixedAgent
+
+
+class State(Enum):
+    SUSCEPTIBLE = 0
+    INFECTED = 1
+    RESISTANT = 2
+
+
+class VirusAgent(FixedAgent):
+    """Individual Agent definition and its properties/interaction methods."""
+
+    def __init__(
+        self,
+        model,
+        initial_state,
+        virus_spread_chance,
+        virus_check_frequency,
+        recovery_chance,
+        gain_resistance_chance,
+        cell,
+    ):
+        super().__init__(model)
+
+        self.state = initial_state
+
+        self.virus_spread_chance = virus_spread_chance
+        self.virus_check_frequency = virus_check_frequency
+        self.recovery_chance = recovery_chance
+        self.gain_resistance_chance = gain_resistance_chance
+        self.cell = cell
+
+    def try_to_infect_neighbors(self):
+        for agent in self.cell.neighborhood.agents:
+            if (agent.state is State.SUSCEPTIBLE) and (
+                self.random.random() < self.virus_spread_chance
+            ):
+                agent.state = State.INFECTED
+
+    def try_gain_resistance(self):
+        if self.random.random() < self.gain_resistance_chance:
+            self.state = State.RESISTANT
+
+    def try_remove_infection(self):
+        # Try to remove
+        if self.random.random() < self.recovery_chance:
+            # Success
+            self.state = State.SUSCEPTIBLE
+            self.try_gain_resistance()
+        else:
+            # Failed
+            self.state = State.INFECTED
+
+    def check_situation(self):
+        if (self.state is State.INFECTED) and (
+            self.random.random() < self.virus_check_frequency
+        ):
+            self.try_remove_infection()
+
+    def step(self):
+        if self.state is State.INFECTED:
+            self.try_to_infect_neighbors()
+        self.check_situation()
+import math
+
+import networkx as nx
+
+import mesa
+from mesa import Model
+from mesa.discrete_space import CellCollection, Network
+from mesa.examples.basic.virus_on_network.agents import State, VirusAgent
+
+
+def number_state(model, state):
+    return sum(1 for a in model.grid.all_cells.agents if a.state is state)
+
+
+def number_infected(model):
+    return number_state(model, State.INFECTED)
+
+
+def number_susceptible(model):
+    return number_state(model, State.SUSCEPTIBLE)
+
+
+def number_resistant(model):
+    return number_state(model, State.RESISTANT)
+
+
+class VirusOnNetwork(Model):
+    """A virus model with some number of agents."""
+
+    def __init__(
+        self,
+        num_nodes=10,
+        avg_node_degree=3,
+        initial_outbreak_size=1,
+        virus_spread_chance=0.4,
+        virus_check_frequency=0.4,
+        recovery_chance=0.3,
+        gain_resistance_chance=0.5,
+        seed=None,
+    ):
+        super().__init__(seed=seed)
+        prob = avg_node_degree / num_nodes
+        graph = nx.erdos_renyi_graph(n=num_nodes, p=prob)
+        self.grid = Network(graph, capacity=1, random=self.random)
+
+        self.initial_outbreak_size = (
+            initial_outbreak_size if initial_outbreak_size <= num_nodes else num_nodes
+        )
+
+        self.datacollector = mesa.DataCollector(
+            {
+                "Infected": number_infected,
+                "Susceptible": number_susceptible,
+                "Resistant": number_resistant,
+                "R over S": self.resistant_susceptible_ratio,
+            }
+        )
+
+        VirusAgent.create_agents(
+            self,
+            num_nodes,
+            State.SUSCEPTIBLE,
+            virus_spread_chance,
+            virus_check_frequency,
+            recovery_chance,
+            gain_resistance_chance,
+            list(self.grid.all_cells),
+        )
+
+        # Infect some nodes
+        infected_nodes = CellCollection(
+            self.random.sample(list(self.grid.all_cells), self.initial_outbreak_size),
+            random=self.random,
+        )
+        for a in infected_nodes.agents:
+            a.state = State.INFECTED
+
+        self.running = True
+        self.datacollector.collect(self)
+
+    def resistant_susceptible_ratio(self):
+        try:
+            return number_state(self, State.RESISTANT) / number_state(
+                self, State.SUSCEPTIBLE
+            )
+        except ZeroDivisionError:
+            return math.inf
+
+    def step(self):
+        self.agents.shuffle_do("step")
+        # collect data
+        self.datacollector.collect(self)
+
+
+import math
+
+import solara
+
+from mesa.examples.basic.virus_on_network.model import (
+    State,
+    VirusOnNetwork,
+    number_infected,
+)
+from mesa.visualization import (
+    Slider,
+    SolaraViz,
+    make_plot_component,
+    make_space_component,
+)
+
+
+def agent_portrayal(agent):
+    node_color_dict = {
+        State.INFECTED: "tab:red",
+        State.SUSCEPTIBLE: "tab:green",
+        State.RESISTANT: "tab:gray",
+    }
+    return {"color": node_color_dict[agent.state], "size": 10}
+
+
+def get_resistant_susceptible_ratio(model):
+    ratio = model.resistant_susceptible_ratio()
+    ratio_text = r"$\infty$" if ratio is math.inf else f"{ratio:.2f}"
+    infected_text = str(number_infected(model))
+
+    return solara.Markdown(
+        f"Resistant/Susceptible Ratio: {ratio_text}<br>Infected Remaining: {infected_text}"
+    )
+
+
+model_params = {
+    "seed": {
+        "type": "InputText",
+        "value": 42,
+        "label": "Random Seed",
+    },
+    "num_nodes": Slider(
+        label="Number of agents",
+        value=10,
+        min=10,
+        max=100,
+        step=1,
+    ),
+    "avg_node_degree": Slider(
+        label="Avg Node Degree",
+        value=3,
+        min=3,
+        max=8,
+        step=1,
+    ),
+    "initial_outbreak_size": Slider(
+        label="Initial Outbreak Size",
+        value=1,
+        min=1,
+        max=10,
+        step=1,
+    ),
+    "virus_spread_chance": Slider(
+        label="Virus Spread Chance",
+        value=0.4,
+        min=0.0,
+        max=1.0,
+        step=0.1,
+    ),
+    "virus_check_frequency": Slider(
+        label="Virus Check Frequency",
+        value=0.4,
+        min=0.0,
+        max=1.0,
+        step=0.1,
+    ),
+    "recovery_chance": Slider(
+        label="Recovery Chance",
+        value=0.3,
+        min=0.0,
+        max=1.0,
+        step=0.1,
+    ),
+    "gain_resistance_chance": Slider(
+        label="Gain Resistance Chance",
+        value=0.5,
+        min=0.0,
+        max=1.0,
+        step=0.1,
+    ),
+}
+
+
+def post_process_lineplot(ax):
+    ax.set_ylim(ymin=0)
+    ax.set_ylabel("# people")
+    ax.legend(bbox_to_anchor=(1.05, 1.0), loc="upper left")
+
+
+SpacePlot = make_space_component(agent_portrayal)
+StatePlot = make_plot_component(
+    {"Infected": "tab:red", "Susceptible": "tab:green", "Resistant": "tab:gray"},
+    post_process=post_process_lineplot,
+)
+
+model1 = VirusOnNetwork()
+
+page = SolaraViz(
+    model1,
+    components=[
+        SpacePlot,
+        StatePlot,
+        get_resistant_susceptible_ratio,
+    ],
+    model_params=model_params,
+    name="Virus Model",
+)
+page  # noqa
+
+
+Wolf-Sheep Predation Model
+
+A simple ecological model, consisting of three agent types: wolves, sheep, and grass. The wolves and the sheep wander around the grid at random. Wolves and sheep both expend energy moving around, and replenish it by eating. Sheep eat grass, and wolves eat sheep if they end up on the same grid cell.
+
+If wolves and sheep have enough energy, they reproduce, creating a new wolf or sheep (in this simplified model, only one parent is needed for reproduction). The grass on each cell regrows at a constant rate. If any wolves and sheep run out of energy, they die.
+
+The model is tests and demonstrates several Mesa concepts and features:
+
+MultiGrid
+
+Multiple agent types (wolves, sheep, grass)
+
+Overlay arbitrary text (wolf’s energy) on agent’s shapes while drawing on CanvasGrid
+
+Agents inheriting a behavior (random movement) from an abstract parent
+
+Writing a model composed of multiple files.
+
+Dynamically adding and removing agents from the schedule
+
+from mesa.discrete_space import CellAgent, FixedAgent
+
+
+class Animal(CellAgent):
+    """The base animal class."""
+
+    def __init__(
+        self, model, energy=8, p_reproduce=0.04, energy_from_food=4, cell=None
+    ):
+        """Initialize an animal.
+
+        Args:
+            model: Model instance
+            energy: Starting amount of energy
+            p_reproduce: Probability of reproduction (asexual)
+            energy_from_food: Energy obtained from 1 unit of food
+            cell: Cell in which the animal starts
+        """
+        super().__init__(model)
+        self.energy = energy
+        self.p_reproduce = p_reproduce
+        self.energy_from_food = energy_from_food
+        self.cell = cell
+
+    def spawn_offspring(self):
+        """Create offspring by splitting energy and creating new instance."""
+        self.energy /= 2
+        self.__class__(
+            self.model,
+            self.energy,
+            self.p_reproduce,
+            self.energy_from_food,
+            self.cell,
+        )
+
+    def feed(self):
+        """Abstract method to be implemented by subclasses."""
+
+    def step(self):
+        """Execute one step of the animal's behavior."""
+        # Move to random neighboring cell
+        self.move()
+
+        self.energy -= 1
+
+        # Try to feed
+        self.feed()
+
+        # Handle death and reproduction
+        if self.energy < 0:
+            self.remove()
+        elif self.random.random() < self.p_reproduce:
+            self.spawn_offspring()
+
+
+class Sheep(Animal):
+    """A sheep that walks around, reproduces (asexually) and gets eaten."""
+
+    def feed(self):
+        """If possible, eat grass at current location."""
+        grass_patch = next(
+            obj for obj in self.cell.agents if isinstance(obj, GrassPatch)
+        )
+        if grass_patch.fully_grown:
+            self.energy += self.energy_from_food
+            grass_patch.fully_grown = False
+
+    def move(self):
+        """Move towards a cell where there isn't a wolf, and preferably with grown grass."""
+        cells_without_wolves = self.cell.neighborhood.select(
+            lambda cell: not any(isinstance(obj, Wolf) for obj in cell.agents)
+        )
+        # If all surrounding cells have wolves, stay put
+        if len(cells_without_wolves) == 0:
+            return
+
+        # Among safe cells, prefer those with grown grass
+        cells_with_grass = cells_without_wolves.select(
+            lambda cell: any(
+                isinstance(obj, GrassPatch) and obj.fully_grown for obj in cell.agents
+            )
+        )
+        # Move to a cell with grass if available, otherwise move to any safe cell
+        target_cells = (
+            cells_with_grass if len(cells_with_grass) > 0 else cells_without_wolves
+        )
+        self.cell = target_cells.select_random_cell()
+
+
+class Wolf(Animal):
+    """A wolf that walks around, reproduces (asexually) and eats sheep."""
+
+    def feed(self):
+        """If possible, eat a sheep at current location."""
+        sheep = [obj for obj in self.cell.agents if isinstance(obj, Sheep)]
+        if sheep:  # If there are any sheep present
+            sheep_to_eat = self.random.choice(sheep)
+            self.energy += self.energy_from_food
+            sheep_to_eat.remove()
+
+    def move(self):
+        """Move to a neighboring cell, preferably one with sheep."""
+        cells_with_sheep = self.cell.neighborhood.select(
+            lambda cell: any(isinstance(obj, Sheep) for obj in cell.agents)
+        )
+        target_cells = (
+            cells_with_sheep if len(cells_with_sheep) > 0 else self.cell.neighborhood
+        )
+        self.cell = target_cells.select_random_cell()
+
+
+class GrassPatch(FixedAgent):
+    """A patch of grass that grows at a fixed rate and can be eaten by sheep."""
+
+    @property
+    def fully_grown(self):
+        """Whether the grass patch is fully grown."""
+        return self._fully_grown
+
+    @fully_grown.setter
+    def fully_grown(self, value: bool) -> None:
+        """Set grass growth state and schedule regrowth if eaten."""
+        self._fully_grown = value
+
+        if not value:  # If grass was just eaten
+            self.model.simulator.schedule_event_relative(
+                setattr,
+                self.grass_regrowth_time,
+                function_args=[self, "fully_grown", True],
+            )
+
+    def __init__(self, model, countdown, grass_regrowth_time, cell):
+        """Create a new patch of grass.
+
+        Args:
+            model: Model instance
+            countdown: Time until grass is fully grown again
+            grass_regrowth_time: Time needed to regrow after being eaten
+            cell: Cell to which this grass patch belongs
+        """
+        super().__init__(model)
+        self._fully_grown = countdown == 0
+        self.grass_regrowth_time = grass_regrowth_time
+        self.cell = cell
+
+        # Schedule initial growth if not fully grown
+        if not self.fully_grown:
+            self.model.simulator.schedule_event_relative(
+                setattr, countdown, function_args=[self, "fully_grown", True]
+            )
+
+
+"""
+Wolf-Sheep Predation Model
+================================
+
+Replication of the model found in NetLogo:
+    Wilensky, U. (1997). NetLogo Wolf Sheep Predation model.
+    http://ccl.northwestern.edu/netlogo/models/WolfSheepPredation.
+    Center for Connected Learning and Computer-Based Modeling,
+    Northwestern University, Evanston, IL.
+"""
+
+import math
+
+from mesa import Model
+from mesa.datacollection import DataCollector
+from mesa.discrete_space import OrthogonalVonNeumannGrid
+from mesa.examples.advanced.wolf_sheep.agents import GrassPatch, Sheep, Wolf
+from mesa.experimental.devs import ABMSimulator
+
+
+class WolfSheep(Model):
+    """Wolf-Sheep Predation Model.
+
+    A model for simulating wolf and sheep (predator-prey) ecosystem modelling.
+    """
+
+    description = (
+        "A model for simulating wolf and sheep (predator-prey) ecosystem modelling."
+    )
+
+    def __init__(
+        self,
+        width=20,
+        height=20,
+        initial_sheep=100,
+        initial_wolves=50,
+        sheep_reproduce=0.04,
+        wolf_reproduce=0.05,
+        wolf_gain_from_food=20,
+        grass=True,
+        grass_regrowth_time=30,
+        sheep_gain_from_food=4,
+        seed=None,
+        simulator: ABMSimulator = None,
+    ):
+        """Create a new Wolf-Sheep model with the given parameters.
+
+        Args:
+            height: Height of the grid
+            width: Width of the grid
+            initial_sheep: Number of sheep to start with
+            initial_wolves: Number of wolves to start with
+            sheep_reproduce: Probability of each sheep reproducing each step
+            wolf_reproduce: Probability of each wolf reproducing each step
+            wolf_gain_from_food: Energy a wolf gains from eating a sheep
+            grass: Whether to have the sheep eat grass for energy
+            grass_regrowth_time: How long it takes for a grass patch to regrow
+                                once it is eaten
+            sheep_gain_from_food: Energy sheep gain from grass, if enabled
+            seed: Random seed
+            simulator: ABMSimulator instance for event scheduling
+        """
+        super().__init__(seed=seed)
+        self.simulator = simulator
+        self.simulator.setup(self)
+
+        # Initialize model parameters
+        self.height = height
+        self.width = width
+        self.grass = grass
+
+        # Create grid using experimental cell space
+        self.grid = OrthogonalVonNeumannGrid(
+            [self.height, self.width],
+            torus=True,
+            capacity=math.inf,
+            random=self.random,
+        )
+
+        # Set up data collection
+        model_reporters = {
+            "Wolves": lambda m: len(m.agents_by_type[Wolf]),
+            "Sheep": lambda m: len(m.agents_by_type[Sheep]),
+        }
+        if grass:
+            model_reporters["Grass"] = lambda m: len(
+                m.agents_by_type[GrassPatch].select(lambda a: a.fully_grown)
+            )
+
+        self.datacollector = DataCollector(model_reporters)
+
+        # Create sheep:
+        Sheep.create_agents(
+            self,
+            initial_sheep,
+            energy=self.rng.random((initial_sheep,)) * 2 * sheep_gain_from_food,
+            p_reproduce=sheep_reproduce,
+            energy_from_food=sheep_gain_from_food,
+            cell=self.random.choices(self.grid.all_cells.cells, k=initial_sheep),
+        )
+        # Create Wolves:
+        Wolf.create_agents(
+            self,
+            initial_wolves,
+            energy=self.rng.random((initial_wolves,)) * 2 * wolf_gain_from_food,
+            p_reproduce=wolf_reproduce,
+            energy_from_food=wolf_gain_from_food,
+            cell=self.random.choices(self.grid.all_cells.cells, k=initial_wolves),
+        )
+
+        # Create grass patches if enabled
+        if grass:
+            possibly_fully_grown = [True, False]
+            for cell in self.grid:
+                fully_grown = self.random.choice(possibly_fully_grown)
+                countdown = (
+                    0 if fully_grown else self.random.randrange(0, grass_regrowth_time)
+                )
+                GrassPatch(self, countdown, grass_regrowth_time, cell)
+
+        # Collect initial data
+        self.running = True
+        self.datacollector.collect(self)
+
+    def step(self):
+        """Execute one step of the model."""
+        # First activate all sheep, then all wolves, both in random order
+        self.agents_by_type[Sheep].shuffle_do("step")
+        self.agents_by_type[Wolf].shuffle_do("step")
+
+        # Collect data
+        self.datacollector.collect(self)
+
+
+from mesa.examples.advanced.wolf_sheep.agents import GrassPatch, Sheep, Wolf
+from mesa.examples.advanced.wolf_sheep.model import WolfSheep
+from mesa.experimental.devs import ABMSimulator
+from mesa.visualization import (
+    CommandConsole,
+    Slider,
+    SolaraViz,
+    make_plot_component,
+    make_space_component,
+)
+
+
+def wolf_sheep_portrayal(agent):
+    if agent is None:
+        return
+
+    portrayal = {
+        "size": 25,
+    }
+
+    if isinstance(agent, Wolf):
+        portrayal["color"] = "tab:red"
+        portrayal["marker"] = "o"
+        portrayal["zorder"] = 2
+    elif isinstance(agent, Sheep):
+        portrayal["color"] = "tab:cyan"
+        portrayal["marker"] = "o"
+        portrayal["zorder"] = 2
+    elif isinstance(agent, GrassPatch):
+        if agent.fully_grown:
+            portrayal["color"] = "tab:green"
+        else:
+            portrayal["color"] = "tab:brown"
+        portrayal["marker"] = "s"
+        portrayal["size"] = 75
+
+    return portrayal
+
+
+model_params = {
+    "seed": {
+        "type": "InputText",
+        "value": 42,
+        "label": "Random Seed",
+    },
+    "grass": {
+        "type": "Select",
+        "value": True,
+        "values": [True, False],
+        "label": "grass regrowth enabled?",
+    },
+    "grass_regrowth_time": Slider("Grass Regrowth Time", 20, 1, 50),
+    "initial_sheep": Slider("Initial Sheep Population", 100, 10, 300),
+    "sheep_reproduce": Slider("Sheep Reproduction Rate", 0.04, 0.01, 1.0, 0.01),
+    "initial_wolves": Slider("Initial Wolf Population", 10, 5, 100),
+    "wolf_reproduce": Slider(
+        "Wolf Reproduction Rate",
+        0.05,
+        0.01,
+        1.0,
+        0.01,
+    ),
+    "wolf_gain_from_food": Slider("Wolf Gain From Food Rate", 20, 1, 50),
+    "sheep_gain_from_food": Slider("Sheep Gain From Food", 4, 1, 10),
+}
+
+
+def post_process_space(ax):
+    ax.set_aspect("equal")
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+
+def post_process_lines(ax):
+    ax.legend(loc="center left", bbox_to_anchor=(1, 0.9))
+
+
+space_component = make_space_component(
+    wolf_sheep_portrayal, draw_grid=False, post_process=post_process_space
+)
+lineplot_component = make_plot_component(
+    {"Wolves": "tab:orange", "Sheep": "tab:cyan", "Grass": "tab:green"},
+    post_process=post_process_lines,
+)
+
+simulator = ABMSimulator()
+model = WolfSheep(simulator=simulator, grass=True)
+
+page = SolaraViz(
+    model,
+    components=[space_component, lineplot_component, CommandConsole],
+    model_params=model_params,
+    name="Wolf Sheep",
+    simulator=simulator,
+)
+page  # noqa
+
+
+Demographic Prisoner’s Dilemma on a Grid
+
+The Demographic Prisoner’s Dilemma is a family of variants on the classic two-player [Prisoner’s Dilemma]. The model consists of agents, each with a strategy of either Cooperate or Defect. Each agent’s payoff is based on its strategy and the strategies of its spatial neighbors. After each step of the model, the agents adopt the strategy of their neighbor with the highest total score.
+
+from mesa.discrete_space import CellAgent
+
+
+class PDAgent(CellAgent):
+    """Agent member of the iterated, spatial prisoner's dilemma model."""
+
+    def __init__(self, model, starting_move=None, cell=None):
+        """
+        Create a new Prisoner's Dilemma agent.
+
+        Args:
+            model: model instance
+            starting_move: If provided, determines the agent's initial state:
+                           C(ooperating) or D(efecting). Otherwise, random.
+        """
+        super().__init__(model)
+        self.score = 0
+        self.cell = cell
+        if starting_move:
+            self.move = starting_move
+        else:
+            self.move = self.random.choice(["C", "D"])
+        self.next_move = None
+
+    @property
+    def is_cooroperating(self):
+        return self.move == "C"
+
+    def step(self):
+        """Get the best neighbor's move, and change own move accordingly
+        if better than own score."""
+
+        # neighbors = self.model.grid.get_neighbors(self.pos, True, include_center=True)
+        neighbors = [*list(self.cell.neighborhood.agents), self]
+        best_neighbor = max(neighbors, key=lambda a: a.score)
+        self.next_move = best_neighbor.move
+
+        if self.model.activation_order != "Simultaneous":
+            self.advance()
+
+    def advance(self):
+        self.move = self.next_move
+        self.score += self.increment_score()
+
+    def increment_score(self):
+        neighbors = self.cell.neighborhood.agents
+        if self.model.activation_order == "Simultaneous":
+            moves = [neighbor.next_move for neighbor in neighbors]
+        else:
+            moves = [neighbor.move for neighbor in neighbors]
+        return sum(self.model.payoff[(self.move, move)] for move in moves)
+
+
+import mesa
+from mesa.discrete_space import OrthogonalMooreGrid
+from mesa.examples.advanced.pd_grid.agents import PDAgent
+
+
+class PdGrid(mesa.Model):
+    """Model class for iterated, spatial prisoner's dilemma model."""
+
+    activation_regimes = ["Sequential", "Random", "Simultaneous"]
+
+    # This dictionary holds the payoff for this agent,
+    # keyed on: (my_move, other_move)
+
+    payoff = {("C", "C"): 1, ("C", "D"): 0, ("D", "C"): 1.6, ("D", "D"): 0}
+
+    def __init__(
+        self, width=50, height=50, activation_order="Random", payoffs=None, seed=None
+    ):
+        """
+        Create a new Spatial Prisoners' Dilemma Model.
+
+        Args:
+            width, height: Grid size. There will be one agent per grid cell.
+            activation_order: Can be "Sequential", "Random", or "Simultaneous".
+                           Determines the agent activation regime.
+            payoffs: (optional) Dictionary of (move, neighbor_move) payoffs.
+        """
+        super().__init__(seed=seed)
+        self.activation_order = activation_order
+        self.grid = OrthogonalMooreGrid((width, height), torus=True, random=self.random)
+
+        if payoffs is not None:
+            self.payoff = payoffs
+
+        PDAgent.create_agents(
+            self, len(self.grid.all_cells.cells), cell=self.grid.all_cells.cells
+        )
+
+        self.datacollector = mesa.DataCollector(
+            {
+                "Cooperating_Agents": lambda m: len(
+                    [a for a in m.agents if a.move == "C"]
+                )
+            }
+        )
+
+        self.running = True
+        self.datacollector.collect(self)
+
+    def step(self):
+        # Activate all agents, based on the activation regime
+        match self.activation_order:
+            case "Sequential":
+                self.agents.do("step")
+            case "Random":
+                self.agents.shuffle_do("step")
+            case "Simultaneous":
+                self.agents.do("step")
+                self.agents.do("advance")
+            case _:
+                raise ValueError(f"Unknown activation order: {self.activation_order}")
+
+        # Collect data
+        self.datacollector.collect(self)
+
+    def run(self, n):
+        """Run the model for n steps."""
+        for _ in range(n):
+            self.step()
+
+
+"""
+Solara-based visualization for the Spatial Prisoner's Dilemma Model.
+"""
+
+from mesa.examples.advanced.pd_grid.model import PdGrid
+from mesa.visualization import (
+    Slider,
+    SolaraViz,
+    make_plot_component,
+    make_space_component,
+)
+
+
+def pd_agent_portrayal(agent):
+    """
+    Portrayal function for rendering PD agents in the visualization.
+    """
+    return {
+        "color": "blue" if agent.move == "C" else "red",
+        "marker": "s",  # square marker
+        "size": 25,
+    }
+
+
+# Model parameters
+model_params = {
+    "seed": {
+        "type": "InputText",
+        "value": 42,
+        "label": "Random Seed",
+    },
+    "width": Slider("Grid Width", value=50, min=10, max=100, step=1),
+    "height": Slider("Grid Height", value=50, min=10, max=100, step=1),
+    "activation_order": {
+        "type": "Select",
+        "value": "Random",
+        "values": PdGrid.activation_regimes,
+        "label": "Activation Regime",
+    },
+}
+
+
+# Create grid visualization component using Altair
+grid_viz = make_space_component(agent_portrayal=pd_agent_portrayal)
+
+# Create plot for tracking cooperating agents over time
+plot_component = make_plot_component("Cooperating_Agents")
+
+# Initialize model
+initial_model = PdGrid()
+
+# Create visualization with all components
+page = SolaraViz(
+    model=initial_model,
+    components=[grid_viz, plot_component],
+    model_params=model_params,
+    name="Spatial Prisoner's Dilemma",
+)
+page  # noqa B018
+
+
+Alliance Formation Model (Meta-Agent Example)
+
+Summary
+This model demonstrates Mesa’s meta agent capability.
+
+Overview of meta agent: Complex systems often have multiple levels of components. A city is not a single entity, but it is made of districts,neighborhoods, buildings, and people. A forest comprises an ecosystem of trees, plants, animals, and microorganisms. An organization is not one entity, but is made of departments, sub-departments, and people. A person is not a single entity, but it is made of micro biomes, organs and cells.
+
+This reality is the motivation for meta-agents. It allows users to represent these multiple levels, where each level can have agents with sub-agents.
+
+This model demonstrates Mesa’s ability to dynamically create new classes of agents that are composed of existing agents. These meta-agents inherits functions and attributes from their sub-agents and users can specify new functionality or attributes they want the meta agent to have. For example, if a user is doing a factory simulation with autonomous systems, each major component of that system can be a sub-agent of the overall robot agent. Or, if someone is doing a simulation of an organization, individuals can be part of different organizational units that are working for some purpose.
+
+To provide a simple demonstration of this capability is an alliance formation model.
+
+In this simulation n agents are created, who have two attributes (1) power and (2) preference. Each attribute is a number between 0 and 1 over a gaussian distribution. Agents then randomly select other agents and use the bilateral shapley value to determine if they should form an alliance. If the expected utility support an alliances, the agent creates a meta-agent. Subsequent steps may add agents to the meta-agent, create new instances of similar hierarchy, or create a new hierarchy level where meta-agents form an alliance of meta-agents. In this visualization of this model a new meta-agent hierarchy will be a larger node and a new color.
+
+In MetaAgents current configuration, agents being part of multiple meta-agents is not supported.
+
+If you would like to see an example of explicit meta-agent formation see the warehouse model in the Mesa example’s repository
+
+import mesa
+
+
+class AllianceAgent(mesa.Agent):
+    """
+    Agent has three attributes power (float), position (float) and level (int)
+
+    """
+
+    def __init__(self, model, power, position, level=0):
+        super().__init__(model)
+        self.power = power
+        self.position = position
+        self.level = level
+
+    """
+    For this demo model agent only need attributes.
+
+    More complex models could have functions that define agent behavior.
+    """
+
+
+import networkx as nx
+import numpy as np
+
+import mesa
+from mesa import Agent
+from mesa.examples.advanced.alliance_formation.agents import AllianceAgent
+from mesa.experimental.meta_agents.meta_agent import (
+    create_meta_agent,
+    find_combinations,
+)
+
+
+class MultiLevelAllianceModel(mesa.Model):
+    """
+    Model for simulating multi-level alliances among agents.
+    """
+
+    def __init__(self, n=50, mean=0.5, std_dev=0.1, seed=42):
+        """
+        Initialize the model.
+
+        Args:
+            n (int): Number of agents.
+            mean (float): Mean value for normal distribution.
+            std_dev (float): Standard deviation for normal distribution.
+            seed (int): Random seed.
+        """
+        super().__init__(seed=seed)
+        self.population = n
+        self.network = nx.Graph()  # Initialize the network
+        self.datacollector = mesa.DataCollector(model_reporters={"Network": "network"})
+
+        # Create Agents
+        power = self.rng.normal(mean, std_dev, n)
+        power = np.clip(power, 0, 1)
+        position = self.rng.normal(mean, std_dev, n)
+        position = np.clip(position, 0, 1)
+        AllianceAgent.create_agents(self, n, power, position)
+        agent_ids = [
+            (agent.unique_id, {"size": 300, "level": 0}) for agent in self.agents
+        ]
+        self.network.add_nodes_from(agent_ids)
+
+    def add_link(self, meta_agent, agents):
+        """
+        Add links between a meta agent and its constituent agents in the network.
+
+        Args:
+            meta_agent (MetaAgent): The meta agent.
+            agents (list): List of agents.
+        """
+        for agent in agents:
+            self.network.add_edge(meta_agent.unique_id, agent.unique_id)
+
+    def calculate_shapley_value(self, agents):
+        """
+        Calculate the Shapley value of the two agents.
+
+        Args:
+            agents (list): List of agents.
+
+        Returns:
+            tuple: Potential utility, new position, and level.
+        """
+        positions = agents.get("position")
+        new_position = 1 - (max(positions) - min(positions))
+        potential_utility = agents.agg("power", sum) * 1.2 * new_position
+
+        value_0 = 0.5 * agents[0].power + 0.5 * (potential_utility - agents[1].power)
+        value_1 = 0.5 * agents[1].power + 0.5 * (potential_utility - agents[0].power)
+
+        if value_0 > agents[0].power and value_1 > agents[1].power:
+            if agents[0].level > agents[1].level:
+                level = agents[0].level
+            elif agents[0].level == agents[1].level:
+                level = agents[0].level + 1
+            else:
+                level = agents[1].level
+
+            return potential_utility, new_position, level
+
+    def only_best_combination(self, combinations):
+        """
+        Filter to keep only the best combination for each agent.
+
+        Args:
+            combinations (list): List of combinations.
+
+        Returns:
+            dict: Unique combinations.
+        """
+        best = {}
+        # Determine best option for EACH agent
+        for group, value in combinations:
+            agent_ids = sorted(group.get("unique_id"))  # by default is bilateral
+            # Deal with all possibilities
+            if (
+                agent_ids[0] not in best and agent_ids[1] not in best
+            ):  # if neither in add both
+                best[agent_ids[0]] = [group, value, agent_ids]
+                best[agent_ids[1]] = [group, value, agent_ids]
+            elif (
+                agent_ids[0] in best and agent_ids[1] in best
+            ):  # if both in, see if both would be trading up
+                if (
+                    value[0] > best[agent_ids[0]][1][0]
+                    and value[0] > best[agent_ids[1]][1][0]
+                ):
+                    # Remove the old alliances
+                    del best[best[agent_ids[0]][2][1]]
+                    del best[best[agent_ids[1]][2][0]]
+                    # Add the new alliance
+                    best[agent_ids[0]] = [group, value, agent_ids]
+                    best[agent_ids[1]] = [group, value, agent_ids]
+            elif (
+                agent_ids[0] in best
+            ):  # if only agent_ids[0] in, see if it would be trading up
+                if value[0] > best[agent_ids[0]][1][0]:
+                    # Remove the old alliance for agent_ids[0]
+                    del best[best[agent_ids[0]][2][1]]
+                    # Add the new alliance
+                    best[agent_ids[0]] = [group, value, agent_ids]
+                    best[agent_ids[1]] = [group, value, agent_ids]
+            elif (
+                agent_ids[1] in best
+            ):  # if only agent_ids[1] in, see if it would be trading up
+                if value[0] > best[agent_ids[1]][1][0]:
+                    # Remove the old alliance for agent_ids[1]
+                    del best[best[agent_ids[1]][2][0]]
+                    # Add the new alliance
+                    best[agent_ids[0]] = [group, value, agent_ids]
+                    best[agent_ids[1]] = [group, value, agent_ids]
+
+        # Create a unique dictionary of the best combinations
+        unique_combinations = {}
+        for group, value, agents_nums in best.values():
+            unique_combinations[tuple(agents_nums)] = [group, value]
+
+        return unique_combinations.values()
+
+    def step(self):
+        """
+        Execute one step of the model.
+        """
+        # Get all other agents of the same type
+        agent_types = list(self.agents_by_type.keys())
+
+        for agent_type in agent_types:
+            similar_agents = self.agents_by_type[agent_type]
+
+            # Find the best combinations using find_combinations
+            if (
+                len(similar_agents) > 1
+            ):  # only form alliances if there are more than 1 agent
+                combinations = find_combinations(
+                    self,
+                    similar_agents,
+                    size=2,
+                    evaluation_func=self.calculate_shapley_value,
+                    filter_func=self.only_best_combination,
+                )
+
+                for alliance, attributes in combinations:
+                    class_name = f"MetaAgentLevel{attributes[2]}"
+                    meta = create_meta_agent(
+                        self,
+                        class_name,
+                        alliance,
+                        Agent,
+                        meta_attributes={
+                            "level": attributes[2],
+                            "power": attributes[0],
+                            "position": attributes[1],
+                        },
+                    )
+
+                    # Update the network if a new meta agent instance created
+                    if meta:
+                        self.network.add_node(
+                            meta.unique_id,
+                            size=(meta.level + 1) * 300,
+                            level=meta.level,
+                        )
+                        self.add_link(meta, meta.agents)
+
+
+
+import matplotlib.pyplot as plt
+import networkx as nx
+import solara
+from matplotlib.figure import Figure
+
+from mesa.examples.advanced.alliance_formation.model import MultiLevelAllianceModel
+from mesa.visualization import SolaraViz
+from mesa.visualization.utils import update_counter
+
+model_params = {
+    "seed": {
+        "type": "InputText",
+        "value": 42,
+        "label": "Random Seed",
+    },
+    "n": {
+        "type": "SliderInt",
+        "value": 50,
+        "label": "Number of agents:",
+        "min": 10,
+        "max": 100,
+        "step": 1,
+    },
+}
+
+# Create visualization elements. The visualization elements are solara components
+# that receive the model instance as a "prop" and display it in a certain way.
+# Under the hood these are just classes that receive the model instance.
+# You can also author your own visualization elements, which can also be functions
+# that receive the model instance and return a valid solara component.
+
+
+@solara.component
+def plot_network(model):
+    update_counter.get()
+    g = model.network
+    pos = nx.fruchterman_reingold_layout(g)
+    fig = Figure()
+    ax = fig.subplots()
+    labels = {agent.unique_id: agent.unique_id for agent in model.agents}
+    node_sizes = [g.nodes[node]["size"] for node in g.nodes]
+    node_colors = [g.nodes[node]["size"] for node in g.nodes()]
+
+    nx.draw(
+        g,
+        pos,
+        node_size=node_sizes,
+        node_color=node_colors,
+        cmap=plt.cm.coolwarm,
+        labels=labels,
+        ax=ax,
+    )
+
+    solara.FigureMatplotlib(fig)
+
+
+# Create initial model instance
+model = MultiLevelAllianceModel(50)
+
+# Create the SolaraViz page. This will automatically create a server and display the
+# visualization elements in a web browser.
+# Display it using the following command in the example directory:
+# solara run app.py
+# It will automatically update and display any changes made to this file
+page = SolaraViz(
+    model,
+    components=[plot_network],
+    model_params=model_params,
+    name="Alliance Formation Model",
+)
+page  # noqa
+
+
+Epstein Civil Violence Model
+
+This model is based on Joshua Epstein’s simulation of how civil unrest grows and is suppressed. Citizen agents wander the grid randomly, and are endowed with individual risk aversion and hardship levels; there is also a universal regime legitimacy value. There are also Cop agents, who work on behalf of the regime. Cops arrest Citizens who are actively rebelling; Citizens decide whether to rebel based on their hardship and the regime legitimacy, and their perceived probability of arrest.
+The model generates mass uprising as self-reinforcing processes: if enough agents are rebelling, the probability of any individual agent being arrested is reduced, making more agents more likely to join the uprising. However, the more rebelling Citizens the Cops arrest, the less likely additional agents become to join.
+
+
+import math
+from enum import Enum
+
+import mesa
+
+
+class CitizenState(Enum):
+    ACTIVE = 1
+    QUIET = 2
+    ARRESTED = 3
+
+
+class EpsteinAgent(mesa.discrete_space.CellAgent):
+    def update_neighbors(self):
+        """
+        Look around and see who my neighbors are
+        """
+        self.neighborhood = self.cell.get_neighborhood(radius=self.vision)
+        self.neighbors = self.neighborhood.agents
+        self.empty_neighbors = [c for c in self.neighborhood if c.is_empty]
+
+    def move(self):
+        if self.model.movement and self.empty_neighbors:
+            new_pos = self.random.choice(self.empty_neighbors)
+            self.move_to(new_pos)
+
+
+class Citizen(EpsteinAgent):
+    """
+    A member of the general population, may or may not be in active rebellion.
+    Summary of rule: If grievance - risk > threshold, rebel.
+
+    Attributes:
+        hardship: Agent's 'perceived hardship (i.e., physical or economic
+            privation).' Exogenous, drawn from U(0,1).
+        regime_legitimacy: Agent's perception of regime legitimacy, equal
+            across agents.  Exogenous.
+        risk_aversion: Exogenous, drawn from U(0,1).
+        threshold: if (grievance - (risk_aversion * arrest_probability)) >
+            threshold, go/remain Active
+        vision: number of cells in each direction (N, S, E and W) that agent
+            can inspect
+        condition: Can be "Quiescent" or "Active;" deterministic function of
+            greivance, perceived risk, and
+        grievance: deterministic function of hardship and regime_legitimacy;
+            how aggrieved is agent at the regime?
+        arrest_probability: agent's assessment of arrest probability, given
+            rebellion
+    """
+
+    def __init__(
+        self, model, regime_legitimacy, threshold, vision, arrest_prob_constant
+    ):
+        """
+        Create a new Citizen.
+        Args:
+            model: the model to which the agent belongs
+            hardship: Agent's 'perceived hardship (i.e., physical or economic
+                privation).' Exogenous, drawn from U(0,1).
+            regime_legitimacy: Agent's perception of regime legitimacy, equal
+                across agents.  Exogenous.
+            risk_aversion: Exogenous, drawn from U(0,1).
+            threshold: if (grievance - (risk_aversion * arrest_probability)) >
+                threshold, go/remain Active
+            vision: number of cells in each direction (N, S, E and W) that
+                agent can inspect. Exogenous.
+            model: model instance
+        """
+        super().__init__(model)
+        self.hardship = self.random.random()
+        self.risk_aversion = self.random.random()
+        self.regime_legitimacy = regime_legitimacy
+        self.threshold = threshold
+        self.state = CitizenState.QUIET
+        self.vision = vision
+        self.jail_sentence = 0
+        self.grievance = self.hardship * (1 - self.regime_legitimacy)
+        self.arrest_prob_constant = arrest_prob_constant
+        self.arrest_probability = None
+
+        self.neighborhood = []
+        self.neighbors = []
+        self.empty_neighbors = []
+
+    def step(self):
+        """
+        Decide whether to activate, then move if applicable.
+        """
+        if self.jail_sentence:
+            self.jail_sentence -= 1
+            return  # no other changes or movements if agent is in jail.
+        self.update_neighbors()
+        self.update_estimated_arrest_probability()
+
+        net_risk = self.risk_aversion * self.arrest_probability
+        if (self.grievance - net_risk) > self.threshold:
+            self.state = CitizenState.ACTIVE
+        else:
+            self.state = CitizenState.QUIET
+
+        self.move()
+
+    def update_estimated_arrest_probability(self):
+        """
+        Based on the ratio of cops to actives in my neighborhood, estimate the
+        p(Arrest | I go active).
+        """
+        cops_in_vision = 0
+        actives_in_vision = 1  # citizen counts herself
+        for neighbor in self.neighbors:
+            if isinstance(neighbor, Cop):
+                cops_in_vision += 1
+            elif neighbor.state == CitizenState.ACTIVE:
+                actives_in_vision += 1
+
+        # there is a body of literature on this equation
+        # the round is not in the pnas paper but without it, its impossible to replicate
+        # the dynamics shown there.
+        self.arrest_probability = 1 - math.exp(
+            -1 * self.arrest_prob_constant * round(cops_in_vision / actives_in_vision)
+        )
+
+
+class Cop(EpsteinAgent):
+    """
+    A cop for life.  No defection.
+    Summary of rule: Inspect local vision and arrest a random active agent.
+
+    Attributes:
+        unique_id: unique int
+        x, y: Grid coordinates
+        vision: number of cells in each direction (N, S, E and W) that cop is
+            able to inspect
+    """
+
+    def __init__(self, model, vision, max_jail_term):
+        """
+        Create a new Cop.
+        Args:
+            x, y: Grid coordinates
+            vision: number of cells in each direction (N, S, E and W) that
+                agent can inspect. Exogenous.
+            model: model instance
+        """
+        super().__init__(model)
+        self.vision = vision
+        self.max_jail_term = max_jail_term
+
+    def step(self):
+        """
+        Inspect local vision and arrest a random active agent. Move if
+        applicable.
+        """
+        self.update_neighbors()
+        active_neighbors = []
+        for agent in self.neighbors:
+            if isinstance(agent, Citizen) and agent.state == CitizenState.ACTIVE:
+                active_neighbors.append(agent)
+        if active_neighbors:
+            arrestee = self.random.choice(active_neighbors)
+            arrestee.jail_sentence = self.random.randint(0, self.max_jail_term)
+            arrestee.state = CitizenState.ARRESTED
+
+        self.move()
+
+
+import mesa
+from mesa.examples.advanced.epstein_civil_violence.agents import (
+    Citizen,
+    CitizenState,
+    Cop,
+)
+
+
+class EpsteinCivilViolence(mesa.Model):
+    """
+    Model 1 from "Modeling civil violence: An agent-based computational
+    approach," by Joshua Epstein.
+    http://www.pnas.org/content/99/suppl_3/7243.full
+
+    Args:
+        height: grid height
+        width: grid width
+        citizen_density: approximate % of cells occupied by citizens.
+        cop_density: approximate % of cells occupied by cops.
+        citizen_vision: number of cells in each direction (N, S, E and W) that
+            citizen can inspect
+        cop_vision: number of cells in each direction (N, S, E and W) that cop
+            can inspect
+        legitimacy:  (L) citizens' perception of regime legitimacy, equal
+            across all citizens
+        max_jail_term: (J_max)
+        active_threshold: if (grievance - (risk_aversion * arrest_probability))
+            > threshold, citizen rebels
+        arrest_prob_constant: set to ensure agents make plausible arrest
+            probability estimates
+        movement: binary, whether agents try to move at step end
+        max_iters: model may not have a natural stopping point, so we set a
+            max.
+    """
+
+    def __init__(
+        self,
+        width=40,
+        height=40,
+        citizen_density=0.7,
+        cop_density=0.074,
+        citizen_vision=7,
+        cop_vision=7,
+        legitimacy=0.8,
+        max_jail_term=1000,
+        active_threshold=0.1,
+        arrest_prob_constant=2.3,
+        movement=True,
+        max_iters=1000,
+        seed=None,
+    ):
+        super().__init__(seed=seed)
+        self.movement = movement
+        self.max_iters = max_iters
+
+        self.grid = mesa.discrete_space.OrthogonalVonNeumannGrid(
+            (width, height), capacity=1, torus=True, random=self.random
+        )
+
+        model_reporters = {
+            "active": CitizenState.ACTIVE.name,
+            "quiet": CitizenState.QUIET.name,
+            "arrested": CitizenState.ARRESTED.name,
+        }
+        agent_reporters = {
+            "jail_sentence": lambda a: getattr(a, "jail_sentence", None),
+            "arrest_probability": lambda a: getattr(a, "arrest_probability", None),
+        }
+        self.datacollector = mesa.DataCollector(
+            model_reporters=model_reporters, agent_reporters=agent_reporters
+        )
+        if cop_density + citizen_density > 1:
+            raise ValueError("Cop density + citizen density must be less than 1")
+
+        for cell in self.grid.all_cells:
+            klass = self.random.choices(
+                [Citizen, Cop, None],
+                cum_weights=[citizen_density, citizen_density + cop_density, 1],
+            )[0]
+
+            if klass == Cop:
+                cop = Cop(self, vision=cop_vision, max_jail_term=max_jail_term)
+                cop.move_to(cell)
+            elif klass == Citizen:
+                citizen = Citizen(
+                    self,
+                    regime_legitimacy=legitimacy,
+                    threshold=active_threshold,
+                    vision=citizen_vision,
+                    arrest_prob_constant=arrest_prob_constant,
+                )
+                citizen.move_to(cell)
+
+        self.running = True
+        self._update_counts()
+        self.datacollector.collect(self)
+
+    def step(self):
+        """
+        Advance the model by one step and collect data.
+        """
+        self.agents.shuffle_do("step")
+        self._update_counts()
+        self.datacollector.collect(self)
+
+        if self.steps > self.max_iters:
+            self.running = False
+
+    def _update_counts(self):
+        """Helper function for counting nr. of citizens in given state."""
+        counts = self.agents_by_type[Citizen].groupby("state").count()
+
+        for state in CitizenState:
+            setattr(self, state.name, counts.get(state, 0))
+
+
+Sugarscape Constant Growback Model with Traders
+This is Epstein & Axtell’s Sugarscape model with Traders, a detailed description is in Chapter four of Growing Artificial Societies: Social Science from the Bottom Up (1996). The model shows an emergent price equilibrium can happen via a decentralized dynamics.
+
+This code generally matches the code in the Complexity Explorer Tutorial, but in .py instead of .ipynb format.
+
+import math
+
+from mesa.discrete_space import CellAgent
+
+
+# Helper function
+def get_distance(cell_1, cell_2):
+    """
+    Calculate the Euclidean distance between two positions
+
+    used in trade.move()
+    """
+
+    x1, y1 = cell_1.coordinate
+    x2, y2 = cell_2.coordinate
+    dx = x1 - x2
+    dy = y1 - y2
+    return math.sqrt(dx**2 + dy**2)
+
+
+class Trader(CellAgent):
+    """
+    Trader:
+    - has a metabolism of sugar and spice
+    - harvest and trade sugar and spice to survive
+    """
+
+    def __init__(
+        self,
+        model,
+        cell,
+        sugar=0,
+        spice=0,
+        metabolism_sugar=0,
+        metabolism_spice=0,
+        vision=0,
+    ):
+        super().__init__(model)
+        self.cell = cell
+        self.sugar = sugar
+        self.spice = spice
+        self.metabolism_sugar = metabolism_sugar
+        self.metabolism_spice = metabolism_spice
+        self.vision = vision
+        self.prices = []
+        self.trade_partners = []
+
+    def get_trader(self, cell):
+        """
+        helper function used in self.trade_with_neighbors()
+        """
+
+        for agent in cell.agents:
+            if isinstance(agent, Trader):
+                return agent
+
+    def calculate_welfare(self, sugar, spice):
+        """
+        helper function
+
+        part 2 self.move()
+        self.trade()
+        """
+
+        # calculate total resources
+        m_total = self.metabolism_sugar + self.metabolism_spice
+        # Cobb-Douglas functional form; starting on p. 97
+        # on Growing Artificial Societies
+        return sugar ** (self.metabolism_sugar / m_total) * spice ** (
+            self.metabolism_spice / m_total
+        )
+
+    def is_starved(self):
+        """
+        Helper function for self.maybe_die()
+        """
+
+        return (self.sugar <= 0) or (self.spice <= 0)
+
+    def calculate_MRS(self, sugar, spice):
+        """
+        Helper function for
+          - self.trade()
+          - self.maybe_self_spice()
+
+        Determines what trader agent needs and can give up
+        """
+
+        return (spice / self.metabolism_spice) / (sugar / self.metabolism_sugar)
+
+    def calculate_sell_spice_amount(self, price):
+        """
+        helper function for self.maybe_sell_spice() which is called from
+        self.trade()
+        """
+
+        if price >= 1:
+            sugar = 1
+            spice = int(price)
+        else:
+            sugar = int(1 / price)
+            spice = 1
+        return sugar, spice
+
+    def sell_spice(self, other, sugar, spice):
+        """
+        used in self.maybe_sell_spice()
+
+        exchanges sugar and spice between traders
+        """
+
+        self.sugar += sugar
+        other.sugar -= sugar
+        self.spice -= spice
+        other.spice += spice
+
+    def maybe_sell_spice(self, other, price, welfare_self, welfare_other):
+        """
+        helper function for self.trade()
+        """
+
+        sugar_exchanged, spice_exchanged = self.calculate_sell_spice_amount(price)
+
+        # Assess new sugar and spice amount - what if change did occur
+        self_sugar = self.sugar + sugar_exchanged
+        other_sugar = other.sugar - sugar_exchanged
+        self_spice = self.spice - spice_exchanged
+        other_spice = other.spice + spice_exchanged
+
+        # double check to ensure agents have resources
+
+        if (
+            (self_sugar <= 0)
+            or (other_sugar <= 0)
+            or (self_spice <= 0)
+            or (other_spice <= 0)
+        ):
+            return False
+
+        # trade criteria #1 - are both agents better off?
+        both_agents_better_off = (
+            welfare_self < self.calculate_welfare(self_sugar, self_spice)
+        ) and (welfare_other < other.calculate_welfare(other_sugar, other_spice))
+
+        # trade criteria #2 is their mrs crossing with potential trade
+        mrs_not_crossing = self.calculate_MRS(
+            self_sugar, self_spice
+        ) > other.calculate_MRS(other_sugar, other_spice)
+
+        if not (both_agents_better_off and mrs_not_crossing):
+            return False
+
+        # criteria met, execute trade
+        self.sell_spice(other, sugar_exchanged, spice_exchanged)
+
+        return True
+
+    def trade(self, other):
+        """
+        helper function used in trade_with_neighbors()
+
+        other is a trader agent object
+        """
+
+        # sanity check to verify code is working as expected
+        assert self.sugar > 0
+        assert self.spice > 0
+        assert other.sugar > 0
+        assert other.spice > 0
+
+        # calculate marginal rate of substitution in Growing Artificial Societies p. 101
+        mrs_self = self.calculate_MRS(self.sugar, self.spice)
+        mrs_other = other.calculate_MRS(other.sugar, other.spice)
+
+        # calculate each agents welfare
+        welfare_self = self.calculate_welfare(self.sugar, self.spice)
+        welfare_other = other.calculate_welfare(other.sugar, other.spice)
+
+        if math.isclose(mrs_self, mrs_other):
+            return
+
+        # calculate price
+        price = math.sqrt(mrs_self * mrs_other)
+
+        if mrs_self > mrs_other:
+            # self is a sugar buyer, spice seller
+            sold = self.maybe_sell_spice(other, price, welfare_self, welfare_other)
+            # no trade - criteria not met
+            if not sold:
+                return
+        else:
+            # self is a spice buyer, sugar seller
+            sold = other.maybe_sell_spice(self, price, welfare_other, welfare_self)
+            # no trade - criteria not met
+            if not sold:
+                return
+
+        # Capture data
+        self.prices.append(price)
+        self.trade_partners.append(other.unique_id)
+
+        # continue trading
+        self.trade(other)
+
+    ######################################################################
+    #                                                                    #
+    #                      MAIN TRADE FUNCTIONS                          #
+    #                                                                    #
+    ######################################################################
+
+    def move(self):
+        """
+        Function for trader agent to identify optimal move for each step in 4 parts
+        1 - identify all possible moves
+        2 - determine which move maximizes welfare
+        3 - find closest best option
+        4 - move
+        """
+
+        # 1. identify all possible moves
+
+        neighboring_cells = [
+            cell
+            for cell in self.cell.get_neighborhood(self.vision, include_center=True)
+            if cell.is_empty
+        ]
+
+        # 2. determine which move maximizes welfare
+
+        welfares = [
+            self.calculate_welfare(
+                self.sugar + cell.sugar,
+                self.spice + cell.spice,
+            )
+            for cell in neighboring_cells
+        ]
+
+        # 3. Find closest best option
+
+        # find the highest welfare in welfares
+        max_welfare = max(welfares)
+        # get the index of max welfare cells
+        # fixme: rewrite using enumerate and single loop
+        candidate_indices = [
+            i for i in range(len(welfares)) if math.isclose(welfares[i], max_welfare)
+        ]
+
+        # convert index to positions of those cells
+        candidates = [neighboring_cells[i] for i in candidate_indices]
+
+        min_dist = min(get_distance(self.cell, cell) for cell in candidates)
+
+        final_candidates = [
+            cell
+            for cell in candidates
+            if math.isclose(get_distance(self.cell, cell), min_dist, rel_tol=1e-02)
+        ]
+
+        # 4. Move Agent
+        self.cell = self.random.choice(final_candidates)
+
+    def eat(self):
+        self.sugar += self.cell.sugar
+        self.cell.sugar = 0
+        self.sugar -= self.metabolism_sugar
+
+        self.spice += self.cell.spice
+        self.cell.spice = 0
+        self.spice -= self.metabolism_spice
+
+    def maybe_die(self):
+        """
+        Function to remove Traders who have consumed all their sugar or spice
+        """
+
+        if self.is_starved():
+            self.remove()
+
+    def trade_with_neighbors(self):
+        """
+        Function for trader agents to decide who to trade with in three parts
+
+        1- identify neighbors who can trade
+        2- trade (2 sessions)
+        3- collect data
+        """
+        # iterate through traders in neighboring cells and trade
+        for a in self.cell.get_neighborhood(radius=self.vision).agents:
+            self.trade(a)
+
+        return
+
+
+from pathlib import Path
+
+import numpy as np
+
+import mesa
+from mesa.discrete_space import OrthogonalVonNeumannGrid
+from mesa.discrete_space.property_layer import PropertyLayer
+from mesa.examples.advanced.sugarscape_g1mt.agents import Trader
+
+
+# Helper Functions
+def flatten(list_of_lists):
+    """
+    helper function for model datacollector for trade price
+    collapses agent price list into one list
+    """
+    return [item for sublist in list_of_lists for item in sublist]
+
+
+def geometric_mean(list_of_prices):
+    """
+    find the geometric mean of a list of prices
+    """
+    return np.exp(np.log(list_of_prices).mean())
+
+
+def get_trade(agent):
+    """
+    For agent reporters in data collector
+
+    return list of trade partners and None for other agents
+    """
+    if isinstance(agent, Trader):
+        return agent.trade_partners
+    else:
+        return None
+
+
+class SugarscapeG1mt(mesa.Model):
+    """
+    Manager class to run Sugarscape with Traders
+    """
+
+    def __init__(
+        self,
+        width=50,
+        height=50,
+        initial_population=200,
+        endowment_min=25,
+        endowment_max=50,
+        metabolism_min=1,
+        metabolism_max=5,
+        vision_min=1,
+        vision_max=5,
+        enable_trade=True,
+        seed=None,
+    ):
+        super().__init__(seed=seed)
+        # Initiate width and height of sugarscape
+        self.width = width
+        self.height = height
+
+        # Initiate population attributes
+        self.enable_trade = enable_trade
+        self.running = True
+
+        # initiate mesa grid class
+        self.grid = OrthogonalVonNeumannGrid(
+            (self.width, self.height), torus=False, random=self.random
+        )
+        # initiate datacollector
+        self.datacollector = mesa.DataCollector(
+            model_reporters={
+                "#Traders": lambda m: len(m.agents),
+                "Trade Volume": lambda m: sum(len(a.trade_partners) for a in m.agents),
+                "Price": lambda m: geometric_mean(
+                    flatten([a.prices for a in m.agents])
+                ),
+            },
+            agent_reporters={"Trade Network": lambda a: get_trade(a)},
+        )
+
+        # read in landscape file from supplementary material
+        self.sugar_distribution = np.genfromtxt(Path(__file__).parent / "sugar-map.txt")
+        self.spice_distribution = np.flip(self.sugar_distribution, 1)
+
+        self.grid.add_property_layer(
+            PropertyLayer.from_data("sugar", self.sugar_distribution)
+        )
+        self.grid.add_property_layer(
+            PropertyLayer.from_data("spice", self.spice_distribution)
+        )
+
+        Trader.create_agents(
+            self,
+            initial_population,
+            self.random.choices(self.grid.all_cells.cells, k=initial_population),
+            sugar=self.rng.integers(
+                endowment_min, endowment_max, (initial_population,), endpoint=True
+            ),
+            spice=self.rng.integers(
+                endowment_min, endowment_max, (initial_population,), endpoint=True
+            ),
+            metabolism_sugar=self.rng.integers(
+                metabolism_min, metabolism_max, (initial_population,), endpoint=True
+            ),
+            metabolism_spice=self.rng.integers(
+                metabolism_min, metabolism_max, (initial_population,), endpoint=True
+            ),
+            vision=self.rng.integers(
+                vision_min, vision_max, (initial_population,), endpoint=True
+            ),
+        )
+
+    def step(self):
+        """
+        Unique step function that does staged activation of sugar and spice
+        and then randomly activates traders
+        """
+        # step Resource agents
+        self.grid.sugar.data = np.minimum(
+            self.grid.sugar.data + 1, self.sugar_distribution
+        )
+        self.grid.spice.data = np.minimum(
+            self.grid.spice.data + 1, self.spice_distribution
+        )
+
+        # step trader agents
+        # to account for agent death and removal we need a separate data structure to
+        # iterate
+        trader_shuffle = self.agents_by_type[Trader].shuffle()
+
+        for agent in trader_shuffle:
+            agent.prices = []
+            agent.trade_partners = []
+            agent.move()
+            agent.eat()
+            agent.maybe_die()
+
+        if not self.enable_trade:
+            # If trade is not enabled, return early
+            self.datacollector.collect(self)
+            return
+
+        trader_shuffle = self.agents_by_type[Trader].shuffle()
+
+        for agent in trader_shuffle:
+            agent.trade_with_neighbors()
+
+        # collect model level data
+        # fixme we can already collect agent class data
+        # fixme, we don't have resource agents anymore so this can be done simpler
+        self.datacollector.collect(self)
+        """
+        Mesa is working on updating datacollector agent reporter
+        so it can collect information on specific agents from
+        mesa.time.RandomActivationByType.
+
+        Please see issue #1419 at
+        https://github.com/projectmesa/mesa/issues/1419
+        (contributions welcome)
+
+        Below is one way to update agent_records to get specific Trader agent data
+        """
+        # Need to remove excess data
+        # Create local variable to store trade data
+        agent_trades = self.datacollector._agent_records[self.steps]
+        # Get rid of all None to reduce data storage needs
+        agent_trades = [agent for agent in agent_trades if agent[2] is not None]
+        # Reassign the dictionary value with lean trade data
+        self.datacollector._agent_records[self.steps] = agent_trades
+
+    def run_model(self, step_count=1000):
+        for _ in range(step_count):
+            self.step()
+
+
+
+from mesa.examples.advanced.sugarscape_g1mt.model import SugarscapeG1mt
+from mesa.visualization import Slider, SolaraViz, make_plot_component
+from mesa.visualization.components import AgentPortrayalStyle, PropertyLayerStyle
+from mesa.visualization.components.matplotlib_components import make_mpl_space_component
+
+
+def agent_portrayal(agent):
+    return AgentPortrayalStyle(
+        x=agent.cell.coordinate[0],
+        y=agent.cell.coordinate[1],
+        color="red",
+        marker="o",
+        size=10,
+        zorder=1,
+    )
+
+
+def propertylayer_portrayal(layer):
+    if layer.name == "sugar":
+        return PropertyLayerStyle(
+            color="blue", alpha=0.8, colorbar=True, vmin=0, vmax=10
+        )
+    return PropertyLayerStyle(color="red", alpha=0.8, colorbar=True, vmin=0, vmax=10)
+
+
+sugarscape_space = make_mpl_space_component(
+    agent_portrayal=agent_portrayal,
+    propertylayer_portrayal=propertylayer_portrayal,
+    post_process=None,
+    draw_grid=False,
+)
+
+model_params = {
+    "seed": {
+        "type": "InputText",
+        "value": 42,
+        "label": "Random Seed",
+    },
+    "width": 50,
+    "height": 50,
+    # Population parameters
+    "initial_population": Slider(
+        "Initial Population", value=200, min=50, max=500, step=10
+    ),
+    # Agent endowment parameters
+    "endowment_min": Slider("Min Initial Endowment", value=25, min=5, max=30, step=1),
+    "endowment_max": Slider("Max Initial Endowment", value=50, min=30, max=100, step=1),
+    # Metabolism parameters
+    "metabolism_min": Slider("Min Metabolism", value=1, min=1, max=3, step=1),
+    "metabolism_max": Slider("Max Metabolism", value=5, min=3, max=8, step=1),
+    # Vision parameters
+    "vision_min": Slider("Min Vision", value=1, min=1, max=3, step=1),
+    "vision_max": Slider("Max Vision", value=5, min=3, max=8, step=1),
+    # Trade parameter
+    "enable_trade": {"type": "Checkbox", "value": True, "label": "Enable Trading"},
+}
+
+model = SugarscapeG1mt()
+
+page = SolaraViz(
+    model,
+    components=[
+        sugarscape_space,
+        make_plot_component("#Traders"),
+        make_plot_component("Price"),
+    ],
+    model_params=model_params,
+    name="Sugarscape {G1, M, T}",
+    play_interval=150,
+)
+page  # noqa
