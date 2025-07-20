@@ -49,14 +49,6 @@ def agent_portrayal(agent):
 
 
 model_params = {
-    "n": {
-       "type": "SliderInt",
-        "value": 50,
-        "label": "Number of Agents:",
-        "min": 10,
-        "max": 100,
-        "step": 1
-    },
     "width": 50,
     "height": 50,
     "robot_type": "random",

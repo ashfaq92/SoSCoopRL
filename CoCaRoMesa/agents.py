@@ -45,26 +45,21 @@ class RobotBase(CellAgent):
 
 
     def move(self):
-        current_x, current_y = self.cell.coordinate
-        
-        target_x = max(0, min(self.model.grid.width - 1, 
-                            current_x + self.random.randint(-self.wander_amplitude, self.wander_amplitude)))
-        target_y = max(0, min(self.model.grid.height - 1,
-                            current_y + self.random.randint(-self.wander_amplitude, self.wander_amplitude)))
-        
-        # Find target cell
-        for cell in self.model.grid.all_cells:
-            if cell.coordinate == (target_x, target_y):
-                self.move_towards_target((target_x, target_y))
-                return
-        
-        # Fallback - but don't go back to previous cell
+        """Movement logic that prevents immediate backtracking"""
+        # If we have a specific target (box or nest), don't wander
+        if (self.targeted_box or self.target_nest) and self.battery > 0:
+            return
+
+        # Get all neighbors except the previous cell
         neighbors = [cell for cell in self.cell.neighborhood if cell != self.previous_cell]
         
+        # If no valid neighbors (trapped), then allow going back
+        if not neighbors:
+            neighbors = list(self.cell.neighborhood)
+    
         if neighbors:
+            self.previous_cell = self.cell
             self.cell = self.random.choice(neighbors)
-        else:
-            self.cell = self.cell.neighborhood.select_random_cell()
 
     def search_box(self):
         raise NotImplementedError("You must implement search_box in a subclass.")
