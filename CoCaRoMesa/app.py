@@ -60,6 +60,8 @@ model_params = {
     "width": 50,
     "height": 50,
     "robot_type": "random",
+    "robot_num": 6,
+    "box_num": 3
 }
 
 def grow_figure(ax):
@@ -68,7 +70,13 @@ def grow_figure(ax):
 
 # create the components
 def create_visualization():
-    cocaro_model = CoCaRoModel(robot_type="random", width=50, height=50)
+    cocaro_model = CoCaRoModel(
+        robot_type= model_params["robot_type"], 
+        robot_num=model_params["robot_num"], 
+        box_num=model_params["box_num"], 
+        width=model_params["width"], 
+        height=model_params["height"]
+    )
     SpaceGraph = make_space_component(
         agent_portrayal,
         post_process=grow_figure

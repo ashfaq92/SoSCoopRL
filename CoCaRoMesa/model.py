@@ -6,10 +6,12 @@ from agents import Nest, Box, RobotRandom, RobotCooperative, RobotSaphesia
 from mesa.datacollection import DataCollector
 
 class CoCaRoModel(mesa.Model):
-    def __init__(self, robot_type, width=50, height=50, seed=None):
+    def __init__(self, robot_type, robot_num, box_num, width=50, height=50, seed=None):
         super().__init__(seed=seed)
         self.grid = OrthogonalVonNeumannGrid( (width, height), random=self.random)
         self.robot_type = robot_type
+        self.robot_num = robot_num
+        self.box_num = box_num
 
         self.colors = ["red", "green", "blue"]
 
@@ -36,17 +38,25 @@ class CoCaRoModel(mesa.Model):
         )
 
     def initialize_boxes(self):
-        box_num = 100
         Box.create_agents(
             self,
-            box_num,
-            color=self.random.choices(self.colors, k=box_num),
-            cell=self.random.choices(self.grid.all_cells.cells, k=box_num),
+            self.box_num,
+            color=self.random.choices(self.colors, k=self.box_num),
+            cell=self.random.choices(self.grid.all_cells.cells, k=self.box_num),
         )
 
 
     def initialize_robots(self):
-        robot_num = 1
+        robots_per_color = self.robot_num // len(self.colors)
+
+        # Assign equal number of robots to each color
+        color_list = []
+        for color in self.colors:
+            color_list += [color] * robots_per_color
+
+        # if robot_num is not divisable by num_colors, assign robots randomly
+        remaining = self.robot_num - len(color_list)
+        color_list += self.random.choices(self.colors, k=remaining)
 
         # Map robot types to classes
         robot_classes = {
@@ -59,10 +69,9 @@ class CoCaRoModel(mesa.Model):
 
         robot_class.create_agents(
             self,
-            robot_num,
-            color=self.random.choices(self.colors, k=robot_num),
-            # todo: robot color equal num (90=30red, 30green, 30blue)
-            cell=self.random.choices(self.grid.all_cells.cells, k=robot_num),
+            self.robot_num,
+            color=color_list,
+            cell=self.random.choices(self.grid.all_cells.cells, k=self.robot_num),
         )
 
 
