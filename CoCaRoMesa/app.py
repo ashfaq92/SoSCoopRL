@@ -23,6 +23,7 @@ def BoxCountPlot(model):
     ax.set_title("Box Count Over Time")
     ax.set_xlabel("Step")
     ax.set_ylabel("Box Count")
+    ax.grid(True, linestyle='--', linewidth=0.5)
 
     solara.FigureMatplotlib(fig)
 
@@ -42,6 +43,7 @@ def MeanBatteryPlot(model):
     ax.set_title("Mean Battery Level Over Time")
     ax.set_xlabel("Step")
     ax.set_ylabel("Mean Battery")
+    ax.grid(True, linestyle='--', linewidth=0.5)
 
     solara.FigureMatplotlib(fig)
 
@@ -62,6 +64,8 @@ def AliveRobotsPlot(model):
     ax.set_title("Alive Robots Over Time")
     ax.set_xlabel("Step")
     ax.set_ylabel("Alive Robots")
+    ax.grid(True, linestyle='--', linewidth=0.5)
+
 
     solara.FigureMatplotlib(fig)
 
@@ -91,9 +95,9 @@ def agent_portrayal(agent):
 model_params = {
     "width": 50,
     "height": 50,
-    "robot_type": "random",
+    "robot_type": "GREEDY",
     "robot_num": 90,
-    "box_num": 30
+    "box_num": 18
 }
 
 def grow_figure(ax):

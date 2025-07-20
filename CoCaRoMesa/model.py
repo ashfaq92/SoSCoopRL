@@ -12,7 +12,8 @@ class CoCaRoModel(mesa.Model):
         self.robot_type = robot_type
         self.robot_num = robot_num
         self.box_num = box_num
-
+        # Track steps for dynamic box spawning
+        self.box_spawn_interval = 3
         self.colors = ["red", "green", "blue"]
 
         self.initialize_nests()
@@ -72,9 +73,10 @@ class CoCaRoModel(mesa.Model):
 
         # Map robot types to classes
         robot_classes = {
-            "random": agents.RobotRandom,
-            "cooperative": agents.RobotCooperative,
-            "saphesia": agents.RobotSaphesia
+            "RANDOM": agents.RobotRandom,
+            "GREEDY": agents.RobotGreedy,
+            "COOPERATIVE": agents.RobotCooperative,
+            "SAPHESIA": agents.RobotSaphesia
         }
         # Get the robot class based on type
         robot_class = robot_classes.get(self.robot_type)
@@ -98,9 +100,25 @@ class CoCaRoModel(mesa.Model):
             print(f"  {color}: {count} agents")
 
     def step(self):
-        print(f"=== Model Step - {len(self.agents)} agents ===")
+        print(f"=== Model Step {self.steps} | {len(self.agents)} agents ===")
         self.agents.shuffle_do("step")
+
+        # Spawn boxes every 3 steps (after step 0)
+        if self.steps > 0 and self.steps % self.box_spawn_interval == 0:
+            self._spawn_new_box()
+
         self.data_collector.collect(self)
+
+    def _spawn_new_box(self):
+        """Spawn new box at random location with random color"""
+        empty_cells = [cell for cell in self.grid.all_cells if cell.is_empty]
+        if empty_cells:
+            new_box = agents.Box(
+                self,
+                color=self.random.choice(self.colors),
+                cell=self.random.choice(empty_cells)
+            )
+
 
 
 

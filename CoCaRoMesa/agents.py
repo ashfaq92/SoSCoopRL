@@ -43,16 +43,30 @@ class RobotBase(CellAgent):
         # reward related
         self.reward = 2 * self.max_battery / 3          # two-third of max energy
         self.reduced_reward = self.max_battery / 3      # one-third of max energy
+        # criticality related
+        self.max_criticality = self.max_battery
+        self.min_criticality = self.min_battery
+        self._criticality = 0
 
     @property
     def battery(self):
         """Battery property with automatic constraint enforcement"""
         return self._battery
 
+    @property
+    def criticality(self):
+        """Battery property with automatic constraint enforcement"""
+        return self._criticality
+
     @battery.setter
     def battery(self, value):
         """Set battery value with min/max constraints enforced"""
         self._battery = max(self.min_battery, min(self.max_battery, int(value)))
+
+    @criticality.setter
+    def criticality(self, value):
+        """Set criticality value with min/max constraints enforced"""
+        self._criticality = max(self.min_criticality, min(self.max_criticality, int(value)))
 
     def step(self):
         # print(f'Robot {self.unique_id} ({self.color}) moving from {self.cell.coordinate}')
@@ -76,6 +90,9 @@ class RobotBase(CellAgent):
             moved_step = (self.cell != self.previous_cell)
             if moved_step:
                 self.battery -= self.battery_consum   # Uses setter automatically
+
+    def update_criticality(self):
+        self.criticality = self.max_criticality - self.battery
 
     def update_reachable_boxes(self):
         neighborhood = self.cell.get_neighborhood(radius=self.vision_range, include_center=False)
@@ -124,23 +141,24 @@ class RobotBase(CellAgent):
             print('picked up the box')
 
     def carry_box_to_nest(self):
-        if self.carried_box and self.battery > self.min_battery:
-            if self.carried_box in self.model.agents:
-                # Find suitable nest
-                nests = self.model.agents_by_type[Nest]
-                matching_nests = nests.select(lambda nest: nest.color == self.carried_box.color)
-                if matching_nests:
-                    self.target_nest = matching_nests[0]
+        if not self.carried_box or self.battery <= self.min_battery:
+            return
 
-                if self.target_nest:
-                    target_coord = self.target_nest.cell.coordinate
-                    if self._move_towards_target(target_coord):
-                        print(f'Robot {self.unique_id} reached {self.carried_box.color} nest!')
-                    else:
-                        print(f'carrying {self.carried_box.color} box to nest')
-            else:
-                # box is dead
-                self.carried_box = None
+        if self.carried_box in self.model.agents:
+            # Find closest suitable nest
+            matching_nests = [nest for nest in self.model.agents_by_type[Nest] if nest.color == self.carried_box.color]
+            if matching_nests:
+                self.target_nest = matching_nests[0]
+
+            if self.target_nest:
+                target_coord = self.target_nest.cell.coordinate
+                if self._move_towards_target(target_coord):
+                    print(f'Robot {self.unique_id} reached {self.carried_box.color} nest!')
+                else:
+                    print(f'carrying {self.carried_box.color} box to nest')
+        else:
+            # box is dead
+            self.carried_box = None
 
     def drop_box_in_nest(self):
         if self.carried_box and self.target_nest and self.battery > self.min_battery and self.carried_box in self.model.agents:
@@ -165,6 +183,7 @@ class RobotBase(CellAgent):
                 box_to_remove.remove()
                 self.carried_box = None
                 self.target_nest = None
+                print('box deposited into nest!')
 
     def die(self):
         if self.battery <= self.min_battery:
@@ -172,8 +191,8 @@ class RobotBase(CellAgent):
                 self.carried_box.owner = None
                 self.carried_box = None
             if self.targeted_box:
+                self.targeted_box.owner = None
                 self.targeted_box = None
-                self.targeted_box.ownder = None
             self.color = 'gray'
 
 
@@ -205,6 +224,38 @@ class RobotBase(CellAgent):
 
         return False  # No neighbors, can't move
 
+    def _compute_anticipated_criticality(self, box_to_take):
+        dist_box_to_me = utils.manhattan(self.cell.coordinate, box_to_take.cell.coordinate)
+        nest_cell = None
+        # Find closest suitable nest
+        matching_nests = [nest for nest in self.model.agents_by_type[Nest] if nest.color == box_to_take.color]
+        if matching_nests:
+            nest_cell = matching_nests[0]
+
+        dist_box_to_nest = utils.manhattan(box_to_take.cell.coordinate, nest_cell.cell.coordinate)
+        anticipated_battery_before_reward = self.battery - (dist_box_to_me + dist_box_to_nest) * self.battery_consum
+
+        if anticipated_battery_before_reward < 0:
+            anticipated_battery_before_reward = 0
+
+        anticipated_battery = anticipated_battery_before_reward + self._colors_reward_efficiency(box_to_take.color)
+
+        # if anticipated_battery < self.min_battery or anticipated_battery_before_reward == 0:
+        #     return self.max_criticality
+        # elif anticipated_battery > self.max_battery:
+        #     return self.min_criticality
+        # else:
+        #     return self.max_criticality - anticipated_battery
+        # Updated version with safety check first:
+        if anticipated_battery_before_reward <= 0:  # Robot dies during the mission
+            return self.max_criticality
+        elif self.min_battery < anticipated_battery < self.max_battery:
+            return self.max_criticality - anticipated_battery
+        elif anticipated_battery >= self.max_battery:
+            return self.min_criticality
+        else:  # anticipated_battery <= 0 (but robot survived the mission)
+            return self.max_criticality
+
 
 
 
@@ -224,7 +275,43 @@ class RobotRandom(RobotBase):
 
 #  ===== ROBOT GREEDY =====
 class RobotGreedy(RobotBase):
-    pass
+    def __init__(self, model, color, cell, vision_range=3):
+        super().__init__(model, color, cell, vision_range)
+
+    def search_box(self):
+        """Non-cooperative greedy box selection algorithm"""
+        if not self.reachable_boxes or self.battery <= self.min_battery:
+            return
+
+        for bx in self.reachable_boxes:
+            # skip if box is already owned by someone else
+            if bx.owner and bx.owner != self:
+                continue
+
+            ant_reach_crit = self._compute_anticipated_criticality(bx)
+            # not carrying anything
+            if self.carried_box is None:
+                if self.targeted_box is None:  # neither carrying nor targetting
+                    self.targeted_box = bx
+                    self.targeted_box.owner = self
+                else:  # not carrying but targeting
+                    my_target_box_crit = self._compute_anticipated_criticality(self.targeted_box)
+                    # check if this is a better box (lower criticality = better)
+                    if ant_reach_crit < my_target_box_crit:
+                        self.targeted_box.owner = None
+                        self.targeted_box = bx
+                        self.targeted_box.owner = self
+            # carrying a box
+            else:
+                my_carried_box_crit = self._compute_anticipated_criticality(self.carried_box)
+                # check if this is a better box
+                if ant_reach_crit < my_carried_box_crit:
+                    # drop the current box (on spot, not at nest)
+                    self.carried_box.owner = None
+                    self.carried_box = None
+                    # Target the new better box
+                    self.targeted_box = bx
+                    self.targeted_box.owner = self
 
 
 #  ===== ROBOT Cooperative =====

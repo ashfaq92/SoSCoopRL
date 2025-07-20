@@ -45,9 +45,6 @@ species robot_greedy parent: robot_base {
     		}
     	}
     }
-
-   
-
 } 
 
 
