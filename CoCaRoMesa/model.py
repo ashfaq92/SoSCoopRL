@@ -94,7 +94,8 @@ class CoCaRoModel(mesa.Model):
 
 # Test it
 if __name__ == "__main__":
-    model = CoCaRoModel("random", width=3, height=3)
+    model = CoCaRoModel("random", robot_num=2, box_num=3, width=3, height=3)
+
 
     print("=== Initial State ===")
     model.print_agent_summary()

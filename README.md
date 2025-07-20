@@ -2,8 +2,6 @@
 
 
 ## Todo:
-- make sure 1/3 number of robots of each color get spawned
-- why robot and box position update is lagging
 - test with multiple robots
 - plot of mean battery level of robots
 - plot of box deposited

@@ -60,8 +60,8 @@ model_params = {
     "width": 50,
     "height": 50,
     "robot_type": "random",
-    "robot_num": 6,
-    "box_num": 3
+    "robot_num": 1,
+    "box_num": 30
 }
 
 def grow_figure(ax):
