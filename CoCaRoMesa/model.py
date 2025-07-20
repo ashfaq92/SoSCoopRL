@@ -2,7 +2,7 @@
 import mesa
 from mesa.discrete_space import OrthogonalVonNeumannGrid, CellAgent
 
-from agents import Nest, Box, RobotRandom, RobotCooperative, RobotSaphesia
+import agents
 from mesa.datacollection import DataCollector
 
 class CoCaRoModel(mesa.Model):
@@ -21,16 +21,28 @@ class CoCaRoModel(mesa.Model):
 
         self.data_collector = DataCollector(
             model_reporters={
-                "BoxCount": lambda m: sum(isinstance(b, Box) for b in m.agents)
+                "BoxCount": lambda m: sum(isinstance(b, agents.Box) for b in m.agents),
+                "MeanBatteryLevel": lambda m: (
+                    sum(robot.battery for robot in m.get_robots()) / len(m.get_robots())
+                    if m.get_robots()  # non-empty list is truthy
+                    else 0
+                ),
+                "AliveRobots": lambda m: len([
+                    r for r in m.get_robots() if r.battery > 0
+                ]),
             }
         )
+
+    def get_robots(self):
+        """Helper method to get all robot agents"""
+        return [agent for agent in self.agents if isinstance(agent, agents.RobotBase)]
 
     def initialize_nests(self):
         nest_num = 3
         nest_locations = [self.grid[(15, 15)], self.grid[(35, 15)], self.grid[(25, 32)]]
         shuffled_colors = self.random.sample(self.colors, len(self.colors))
 
-        Nest.create_agents(
+        agents.Nest.create_agents(
             self,
             nest_num,
             color=shuffled_colors,
@@ -38,7 +50,7 @@ class CoCaRoModel(mesa.Model):
         )
 
     def initialize_boxes(self):
-        Box.create_agents(
+        agents.Box.create_agents(
             self,
             self.box_num,
             color=self.random.choices(self.colors, k=self.box_num),
@@ -60,9 +72,9 @@ class CoCaRoModel(mesa.Model):
 
         # Map robot types to classes
         robot_classes = {
-            "random": RobotRandom,
-            "cooperative": RobotCooperative,
-            "saphesia": RobotSaphesia
+            "random": agents.RobotRandom,
+            "cooperative": agents.RobotCooperative,
+            "saphesia": agents.RobotSaphesia
         }
         # Get the robot class based on type
         robot_class = robot_classes.get(self.robot_type)

@@ -26,6 +26,47 @@ def BoxCountPlot(model):
 
     solara.FigureMatplotlib(fig)
 
+@solara.component
+def MeanBatteryPlot(model):
+    update_counter.get()  # ensures re-rendering on step
+
+    # Retrieve collected data
+    df = model.data_collector.get_model_vars_dataframe().reset_index()
+
+    fig = Figure(figsize=(6, 4))
+    ax = fig.subplots()
+
+    # Plot using seaborn (with matplotlib backend)
+    sns.lineplot(data=df, x="index", y="MeanBatteryLevel", ax=ax)
+
+    ax.set_title("Mean Battery Level Over Time")
+    ax.set_xlabel("Step")
+    ax.set_ylabel("Mean Battery")
+
+    solara.FigureMatplotlib(fig)
+
+
+@solara.component
+def AliveRobotsPlot(model):
+    update_counter.get()  # ensures re-rendering on step
+
+    # Retrieve collected data
+    df = model.data_collector.get_model_vars_dataframe().reset_index()
+
+    fig = Figure(figsize=(6, 4))
+    ax = fig.subplots()
+
+    # Plot using seaborn (with matplotlib backend)
+    sns.lineplot(data=df, x="index", y="AliveRobots", ax=ax)
+
+    ax.set_title("Alive Robots Over Time")
+    ax.set_xlabel("Step")
+    ax.set_ylabel("Alive Robots")
+
+    solara.FigureMatplotlib(fig)
+
+
+
 def agent_portrayal(agent):
     if agent is None:
         return
@@ -34,7 +75,6 @@ def agent_portrayal(agent):
         "size": 200,
         "color": "tab:"+agent.color,
     }
-    # todo: zorder not working
     if isinstance(agent, Box):
         portrayal["marker"] = "s"   # square for boxes
         portrayal["zorder"] = 1
@@ -52,7 +92,7 @@ model_params = {
     "width": 50,
     "height": 50,
     "robot_type": "random",
-    "robot_num": 1,
+    "robot_num": 90,
     "box_num": 30
 }
 
@@ -76,7 +116,7 @@ def create_visualization():
 
     return SolaraViz(
         model=cocaro_model,
-        components=[SpaceGraph, BoxCountPlot],
+        components=[SpaceGraph, BoxCountPlot, MeanBatteryPlot, AliveRobotsPlot],
         model_params=model_params,
         name="CoCaRo Model",
     )
@@ -86,4 +126,4 @@ Page = app
 
 if __name__ == "__main__":
     print("Run with: solara run app.py")
-    print("Or: python -m solara.server wealth_app.py")
+    print("Or: python -m solara.server app.py")
