@@ -95,7 +95,7 @@ def agent_portrayal(agent):
 model_params = {
     "width": 50,
     "height": 50,
-    "robot_type": "GREEDY",
+    "robot_type": "COOPERATIVE",
     "robot_num": 90,
     "box_num": 18
 }
