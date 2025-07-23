@@ -3,8 +3,22 @@ from mesa.visualization.utils import update_counter
 from matplotlib.figure import Figure
 import seaborn as sns
 import solara
+
+
+
+from agents.box import Box
+from agents.robot_base import RobotBase
 from model import CoCaRoModel
-from agents import Nest, Box, RobotBase
+from agents.nest import Nest
+
+
+model_params = {
+    "width": 50,
+    "height": 50,
+    "robot_type": "COOPERATIVE",
+    "robot_num": 90,
+    "box_num": 18
+}
 
 
 @solara.component
@@ -65,8 +79,6 @@ def AliveRobotsPlot(model):
     ax.set_xlabel("Step")
     ax.set_ylabel("Alive Robots")
     ax.grid(True, linestyle='--', linewidth=0.5)
-
-
     solara.FigureMatplotlib(fig)
 
 
@@ -92,13 +104,7 @@ def agent_portrayal(agent):
     return portrayal
 
 
-model_params = {
-    "width": 50,
-    "height": 50,
-    "robot_type": "COOPERATIVE",
-    "robot_num": 90,
-    "box_num": 18
-}
+
 
 def grow_figure(ax):
     # ax is your grid’s Axes; get the Figure and resize it
@@ -107,10 +113,10 @@ def grow_figure(ax):
 # create the components
 def create_visualization():
     cocaro_model = CoCaRoModel(
-        robot_type= model_params["robot_type"], 
-        robot_num=model_params["robot_num"], 
-        box_num=model_params["box_num"], 
-        width=model_params["width"], 
+        robot_type= model_params["robot_type"],
+        robot_num=model_params["robot_num"],
+        box_num=model_params["box_num"],
+        width=model_params["width"],
         height=model_params["height"]
     )
     SpaceGraph = make_space_component(

@@ -1,9 +1,15 @@
-
 import mesa
-from mesa.discrete_space import OrthogonalVonNeumannGrid, CellAgent
-
-import agents
+from mesa.discrete_space import OrthogonalVonNeumannGrid
 from mesa.datacollection import DataCollector
+
+from agents.box import Box
+from agents.nest import Nest
+from agents.robot_base import RobotBase
+from agents.robot_cooperative import RobotCooperative
+from agents.robot_greedy import RobotGreedy
+from agents.robot_random import RobotRandom
+from agents.robot_saphesia import RobotSaphesia
+
 
 class CoCaRoModel(mesa.Model):
     def __init__(self, robot_type, robot_num, box_num, width=50, height=50, seed=None):
@@ -22,7 +28,7 @@ class CoCaRoModel(mesa.Model):
 
         self.data_collector = DataCollector(
             model_reporters={
-                "BoxCount": lambda m: sum(isinstance(b, agents.Box) for b in m.agents),
+                "BoxCount": lambda m: sum(isinstance(b, Box) for b in m.agents),
                 "MeanBatteryLevel": lambda m: (
                     sum(robot.battery for robot in m.get_robots()) / len(m.get_robots())
                     if m.get_robots()  # non-empty list is truthy
@@ -36,14 +42,14 @@ class CoCaRoModel(mesa.Model):
 
     def get_robots(self):
         """Helper method to get all robot agents"""
-        return [agent for agent in self.agents if isinstance(agent, agents.RobotBase)]
+        return [agent for agent in self.agents if isinstance(agent, RobotBase)]
 
     def initialize_nests(self):
         nest_num = 3
         nest_locations = [self.grid[(15, 15)], self.grid[(35, 15)], self.grid[(25, 32)]]
         shuffled_colors = self.random.sample(self.colors, len(self.colors))
 
-        agents.Nest.create_agents(
+        Nest.create_agents(
             self,
             nest_num,
             color=shuffled_colors,
@@ -51,7 +57,7 @@ class CoCaRoModel(mesa.Model):
         )
 
     def initialize_boxes(self):
-        agents.Box.create_agents(
+        Box.create_agents(
             self,
             self.box_num,
             color=self.random.choices(self.colors, k=self.box_num),
@@ -73,10 +79,10 @@ class CoCaRoModel(mesa.Model):
 
         # Map robot types to classes
         robot_classes = {
-            "RANDOM": agents.RobotRandom,
-            "GREEDY": agents.RobotGreedy,
-            "COOPERATIVE": agents.RobotCooperative,
-            "SAPHESIA": agents.RobotSaphesia
+            "RANDOM": RobotRandom,
+            "GREEDY": RobotGreedy,
+            "COOPERATIVE": RobotCooperative,
+            "SAPHESIA": RobotSaphesia
         }
         # Get the robot class based on type
         robot_class = robot_classes.get(self.robot_type)
@@ -113,7 +119,7 @@ class CoCaRoModel(mesa.Model):
         """Spawn new box at random location with random color"""
         empty_cells = [cell for cell in self.grid.all_cells if cell.is_empty]
         if empty_cells:
-            new_box = agents.Box(
+            new_box = Box(
                 self,
                 color=self.random.choice(self.colors),
                 cell=self.random.choice(empty_cells)
